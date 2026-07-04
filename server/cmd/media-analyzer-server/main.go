@@ -8,25 +8,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
-
-	"media-analyzer/server/internal/detect"
 )
 
 const maxProbeBytes int64 = 1024 * 1024
-
-type analyzeResponse struct {
-	Input    inputInfo     `json:"input"`
-	Detector detect.Result `json:"detection"`
-}
-
-type inputInfo struct {
-	Type string `json:"type"`
-	Name string `json:"name,omitempty"`
-	URL  string `json:"url,omitempty"`
-	Size int64  `json:"size,omitempty"`
-}
 
 func main() {
 	mux := http.NewServeMux()
@@ -53,10 +41,10 @@ func analyzeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	contentType := r.Header.Get("Content-Type")
-	var resp analyzeResponse
+	var resp []byte
 	var err error
 
-	if len(contentType) >= len("multipart/form-data") && contentType[:len("multipart/form-data")] == "multipart/form-data" {
+	if strings.HasPrefix(contentType, "multipart/form-data") {
 		resp, err = analyzeUpload(r)
 	} else {
 		resp, err = analyzeJSON(r)
@@ -68,77 +56,109 @@ func analyzeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	encoder := json.NewEncoder(w)
-	encoder.SetIndent("", "  ")
-	_ = encoder.Encode(resp)
+	_, _ = w.Write(resp)
 }
 
-func analyzeUpload(r *http.Request) (analyzeResponse, error) {
+func analyzeUpload(r *http.Request) ([]byte, error) {
 	if err := r.ParseMultipartForm(maxProbeBytes); err != nil {
-		return analyzeResponse{}, err
+		return nil, err
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		return analyzeResponse{}, err
+		return nil, err
 	}
 	defer file.Close()
 
 	data, err := io.ReadAll(io.LimitReader(file, maxProbeBytes))
 	if err != nil {
-		return analyzeResponse{}, err
+		return nil, err
 	}
 
-	return analyzeResponse{
-		Input: inputInfo{
-			Type: "file",
-			Name: header.Filename,
-			Size: header.Size,
-		},
-		Detector: detect.Analyze(data, header.Filename),
-	}, nil
+	return runCoreAnalyzer(data, header.Filename)
 }
 
-func analyzeJSON(r *http.Request) (analyzeResponse, error) {
+func analyzeJSON(r *http.Request) ([]byte, error) {
 	var req struct {
 		URL string `json:"url"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
-		return analyzeResponse{}, err
+		return nil, err
 	}
 	parsed, err := url.Parse(req.URL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return analyzeResponse{}, errors.New("url must be http or https")
+		return nil, errors.New("url must be http or https")
 	}
 
 	client := &http.Client{Timeout: 20 * time.Second}
 	httpReq, err := http.NewRequest(http.MethodGet, req.URL, nil)
 	if err != nil {
-		return analyzeResponse{}, err
+		return nil, err
 	}
 	httpReq.Header.Set("Range", "bytes=0-1048575")
 	httpResp, err := client.Do(httpReq)
 	if err != nil {
-		return analyzeResponse{}, err
+		return nil, err
 	}
 	defer httpResp.Body.Close()
 	if httpResp.StatusCode >= 400 {
-		return analyzeResponse{}, errors.New("remote server returned " + httpResp.Status)
+		return nil, errors.New("remote server returned " + httpResp.Status)
 	}
 
 	data, err := io.ReadAll(io.LimitReader(httpResp.Body, maxProbeBytes))
 	if err != nil {
-		return analyzeResponse{}, err
+		return nil, err
 	}
 
-	return analyzeResponse{
-		Input: inputInfo{
-			Type: "url",
-			URL:  req.URL,
-			Name: filepath.Base(parsed.Path),
-			Size: httpResp.ContentLength,
-		},
-		Detector: detect.Analyze(data, parsed.Path),
-	}, nil
+	return runCoreAnalyzer(data, filepath.Base(parsed.Path))
+}
+
+func runCoreAnalyzer(data []byte, nameHint string) ([]byte, error) {
+	tmp, err := os.CreateTemp("", "media-analyzer-*"+filepath.Ext(nameHint))
+	if err != nil {
+		return nil, err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return nil, err
+	}
+	if err := tmp.Close(); err != nil {
+		return nil, err
+	}
+
+	cmd := exec.Command(coreAnalyzerPath(), tmpPath)
+	output, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			message := strings.TrimSpace(string(exitErr.Stderr))
+			if message != "" {
+				return nil, errors.New(message)
+			}
+		}
+		return nil, err
+	}
+	if !json.Valid(output) {
+		return nil, errors.New("core analyzer returned invalid JSON")
+	}
+	return output, nil
+}
+
+func coreAnalyzerPath() string {
+	if value := os.Getenv("MEDIA_ANALYZER_CORE"); value != "" {
+		return value
+	}
+	candidates := []string{
+		filepath.Join("..", "build", "media-analyzer-core"),
+		filepath.Join("build", "media-analyzer-core"),
+	}
+	for _, candidate := range candidates {
+		if stat, err := os.Stat(candidate); err == nil && !stat.IsDir() {
+			return candidate
+		}
+	}
+	return filepath.Join("..", "build", "media-analyzer-core")
 }
 
 func staticDir() string {

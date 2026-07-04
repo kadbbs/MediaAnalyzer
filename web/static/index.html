@@ -31,18 +31,103 @@
           </form>
         </section>
 
-        <section class="result-layout">
-          <article class="summary" id="summary">
-            <h2>摘要</h2>
-            <dl>
-              <div><dt>Format</dt><dd id="format">-</dd></div>
-              <div><dt>Family</dt><dd id="family">-</dd></div>
-              <div><dt>Confidence</dt><dd id="confidence">-</dd></div>
-            </dl>
+        <section class="toolbar" role="tablist" aria-label="分析结果视图">
+          <button class="tab active" type="button" data-view="overview">总览</button>
+          <button class="tab" type="button" data-view="tracks">轨道与编码</button>
+          <button class="tab" type="button" data-view="structure">容器结构</button>
+          <button class="tab" type="button" data-view="json">JSON</button>
+        </section>
+
+        <section class="view active" id="overviewView">
+          <article class="summary-band">
+            <div class="metric">
+              <span>格式</span>
+              <strong id="format">-</strong>
+            </div>
+            <div class="metric">
+              <span>容器</span>
+              <strong id="containerFormat">-</strong>
+            </div>
+            <div class="metric">
+              <span>时长</span>
+              <strong id="duration">-</strong>
+            </div>
+            <div class="metric">
+              <span>轨道</span>
+              <strong id="trackCount">-</strong>
+            </div>
+            <div class="metric">
+              <span>置信度</span>
+              <strong id="confidence">-</strong>
+            </div>
           </article>
 
-          <article class="json-panel">
-            <h2>JSON</h2>
+          <section class="two-column">
+            <article class="panel">
+              <h2>输入</h2>
+              <dl class="kv" id="inputDetails"></dl>
+            </article>
+            <article class="panel">
+              <h2>识别依据</h2>
+              <ul class="evidence-list" id="evidenceList"></ul>
+            </article>
+          </section>
+
+          <section class="insight-grid">
+            <article class="panel">
+              <h2>文件解读</h2>
+              <ol class="insight-list" id="beginnerInsights"></ol>
+            </article>
+            <article class="panel">
+              <h2>专家速览</h2>
+              <dl class="kv" id="expertFacts"></dl>
+            </article>
+            <article class="panel">
+              <h2>术语速查</h2>
+              <div class="glossary-list" id="glossaryList"></div>
+            </article>
+          </section>
+
+          <article class="panel">
+            <h2>轨道概览</h2>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>类型</th>
+                    <th>Codec</th>
+                    <th>时长</th>
+                    <th>尺寸/采样率</th>
+                    <th>Samples</th>
+                  </tr>
+                </thead>
+                <tbody id="trackSummaryRows"></tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+
+        <section class="view" id="tracksView">
+          <div class="track-list" id="trackList"></div>
+        </section>
+
+        <section class="view" id="structureView">
+          <section class="structure-layout">
+            <article class="panel">
+              <h2>Box Tree</h2>
+              <div class="tree" id="structureTree"></div>
+            </article>
+            <aside class="panel">
+              <h2>节点说明</h2>
+              <div class="box-guide" id="boxGuide"></div>
+            </aside>
+          </section>
+        </section>
+
+        <section class="view" id="jsonView">
+          <article class="panel">
+            <h2>原始 JSON</h2>
             <pre id="jsonOutput">{}</pre>
           </article>
         </section>
@@ -51,4 +136,3 @@
     <script src="/app.js"></script>
   </body>
 </html>
-

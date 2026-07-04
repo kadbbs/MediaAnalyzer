@@ -11,12 +11,14 @@ MediaAnalyzer 是一个 Web 媒体结构分析工具。目标是通过上传文�
 
 ## 当前状态
 
-已建立 Milestone 0 的最小骨架：
+已建立 Milestone 0 的骨架，并开始进入真实解析阶段：
 
-- C++ CLI：读取文件前若干字节，输出格式识别 JSON。
-- Go server：提供 `/api/analyze` 文件上传和 URL 分析入口，服务静态前端。
-- Python golden test：生成小样本并验证 C++ detector。
-- Web UI：上传文件或输入 URL，展示 JSON 分析结果。
+- C++ CLI：输出完整分析报告，包含 `input`、`detection` 和容器解析结果。
+- ISO-BMFF/MP4：解析 box 树、`ftyp`、`mvhd`、`trak/mdia/stbl/stsd`、sample entry 和 sample count。
+- H.264/AVC：解析 `avcC`，进一步解析 SPS/PPS 数量、NAL length size、profile、level 和 SPS 分辨率。
+- Go server：提供 `/api/analyze` 文件上传和 URL 分析入口，并调用 C++ core 返回完整报告。
+- Python golden test：生成小样本并验证格式识别、MP4 容器解析和 H.264 header 解析。
+- Web UI：上传文件或输入 URL，默认展示可视化总览、轨道与编码、容器结构树，并保留原始 JSON 视图。
 
 ## 构建 C++ 核心
 

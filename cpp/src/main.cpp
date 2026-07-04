@@ -1,4 +1,4 @@
-#include "media_analyzer/format_detector.h"
+#include "media_analyzer/analysis.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -10,7 +10,7 @@
 
 namespace {
 
-constexpr std::size_t kDefaultReadLimit = 1024 * 1024;
+constexpr std::size_t kDefaultReadLimit = 256ull * 1024ull * 1024ull;
 
 void PrintUsage(const char* argv0) {
   std::cerr << "Usage: " << argv0 << " <media-file> [read-limit-bytes]\n";
@@ -49,8 +49,7 @@ int main(int argc, char** argv) {
     data.push_back(static_cast<std::uint8_t>(ch));
   }
 
-  const auto detection = media_analyzer::DetectFormat(data, path);
-  std::cout << media_analyzer::DetectionToJson(detection);
+  std::cout << media_analyzer::AnalyzeFileToJson(
+      data, media_analyzer::AnalyzeOptions{.name_hint = path});
   return 0;
 }
-

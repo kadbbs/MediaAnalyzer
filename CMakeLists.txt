@@ -7,7 +7,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(media_analyzer_core
+  cpp/src/analysis.cpp
   cpp/src/format_detector.cpp
+  cpp/src/iso_bmff.cpp
 )
 
 target_include_directories(media_analyzer_core
@@ -30,4 +32,3 @@ target_link_libraries(media-analyzer-core
   PRIVATE
     media_analyzer_core
 )
-

@@ -13,6 +13,7 @@ BIN = ROOT / "build" / "media-analyzer-core"
 
 FIXTURES = {
     "sample.mp4": b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2",
+    "video_avc1.mp4": None,
     "sample.webm": b"\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01\x42\xf7\x81\x01",
     "sample.ts": b"\x47" + (b"\x00" * 187) + b"\x47" + (b"\x00" * 187) + b"\x47" + (b"\x00" * 187),
     "sample.wav": b"RIFF\x24\x00\x00\x00WAVEfmt ",
@@ -29,6 +30,7 @@ FIXTURES = {
 
 EXPECTED = {
     "sample.mp4": "iso-bmff",
+    "video_avc1.mp4": "iso-bmff",
     "sample.webm": "matroska/webm",
     "sample.ts": "mpeg-ts",
     "sample.wav": "wav",
@@ -43,6 +45,117 @@ EXPECTED = {
 }
 
 
+def be16(value: int) -> bytes:
+    return value.to_bytes(2, "big")
+
+
+def be32(value: int) -> bytes:
+    return value.to_bytes(4, "big")
+
+
+def box(kind: bytes, payload: bytes) -> bytes:
+    return be32(8 + len(payload)) + kind + payload
+
+
+def fullbox(kind: bytes, payload: bytes, version: int = 0, flags: int = 0) -> bytes:
+    return box(kind, bytes([version]) + flags.to_bytes(3, "big") + payload)
+
+
+def make_video_avc1_mp4() -> bytes:
+    ftyp = box(b"ftyp", b"isom" + be32(512) + b"isomiso2avc1mp41")
+    mvhd = fullbox(
+        b"mvhd",
+        be32(0)
+        + be32(0)
+        + be32(1000)
+        + be32(2000)
+        + be32(0x00010000)
+        + be16(0x0100)
+        + be16(0)
+        + (b"\x00" * 8)
+        + be32(0x00010000)
+        + be32(0)
+        + be32(0)
+        + be32(0)
+        + be32(0x00010000)
+        + be32(0)
+        + be32(0)
+        + be32(0)
+        + be32(0x40000000)
+        + (b"\x00" * 24)
+        + be32(2),
+    )
+    tkhd = fullbox(
+        b"tkhd",
+        be32(0)
+        + be32(0)
+        + be32(1)
+        + be32(0)
+        + be32(2000)
+        + (b"\x00" * 8)
+        + be16(0)
+        + be16(0)
+        + be16(0)
+        + be16(0)
+        + be32(0x00010000)
+        + be32(0)
+        + be32(0)
+        + be32(0)
+        + be32(0x00010000)
+        + be32(0)
+        + be32(0)
+        + be32(0)
+        + be32(0x40000000)
+        + be32(640 << 16)
+        + be32(360 << 16),
+        flags=7,
+    )
+    mdhd = fullbox(b"mdhd", be32(0) + be32(0) + be32(90000) + be32(180000) + be16(0x55C4) + be16(0))
+    hdlr = fullbox(b"hdlr", be32(0) + b"vide" + (b"\x00" * 12) + b"VideoHandler\x00")
+
+    sps = bytes.fromhex("6764001facd940a02ff970110000030001000003003c8f162d96")
+    pps = bytes.fromhex("68ebe3cb22c0")
+    avcc = box(
+        b"avcC",
+        bytes([1, 100, 0, 31, 0xFF, 0xE1])
+        + be16(len(sps))
+        + sps
+        + bytes([1])
+        + be16(len(pps))
+        + pps,
+    )
+    avc1_payload = (
+        (b"\x00" * 6)
+        + be16(1)
+        + be16(0)
+        + be16(0)
+        + (b"\x00" * 12)
+        + be16(640)
+        + be16(360)
+        + be32(0x00480000)
+        + be32(0x00480000)
+        + be32(0)
+        + be16(1)
+        + bytes([0])
+        + (b"\x00" * 31)
+        + be16(24)
+        + be16(0xFFFF)
+        + avcc
+    )
+    avc1 = box(b"avc1", avc1_payload)
+    stsd = fullbox(b"stsd", be32(1) + avc1)
+    stsz = fullbox(b"stsz", be32(0) + be32(1) + be32(1234))
+    stbl = box(b"stbl", stsd + stsz)
+    minf = box(b"minf", stbl)
+    mdia = box(b"mdia", mdhd + hdlr + minf)
+    trak = box(b"trak", tkhd + mdia)
+    moov = box(b"moov", mvhd + trak)
+    return ftyp + moov
+
+
+FIXTURES["video_avc1.mp4"] = make_video_avc1_mp4()
+
+
 def ensure_binary() -> None:
     if BIN.exists():
         return
@@ -55,6 +168,12 @@ def run_detector(path: Path) -> dict:
     return json.loads(result.stdout)
 
 
+def detection_format(payload: dict) -> str:
+    if "detection" in payload:
+        return payload["detection"]["format"]
+    return payload["format"]
+
+
 def main() -> int:
     ensure_binary()
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -65,8 +184,23 @@ def main() -> int:
             path.write_bytes(payload)
             actual = run_detector(path)
             expected = EXPECTED[name]
-            if actual["format"] != expected:
-                failures.append((name, expected, actual["format"], actual))
+            actual_format = detection_format(actual)
+            if actual_format != expected:
+                failures.append((name, expected, actual_format, actual))
+            if name == "video_avc1.mp4":
+                try:
+                    track = actual["container"]["tracks"][0]
+                    assert track["type"] == "video"
+                    assert track["width"] == 640
+                    assert track["height"] == 360
+                    assert track["sample_count"] == 1
+                    assert track["codec"]["fourcc"] == "avc1"
+                    assert track["codec"]["description"] == "H.264/AVC"
+                    assert track["codec"]["profile"]
+                    assert track["codec"]["sps_count"] == 1
+                    assert track["codec"]["pps_count"] == 1
+                except Exception as exc:
+                    failures.append((name, "parsed AVC track", f"error: {exc}", actual))
 
         if failures:
             for name, expected, actual, detail in failures:
