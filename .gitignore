@@ -1,0 +1,13 @@
+build/
+dist/
+.cache/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+media-analyzer-core
+server/media-analyzer-server
