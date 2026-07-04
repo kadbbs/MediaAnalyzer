@@ -14,6 +14,11 @@ const trackSummaryRows = document.querySelector("#trackSummaryRows");
 const trackList = document.querySelector("#trackList");
 const structureTree = document.querySelector("#structureTree");
 const boxGuide = document.querySelector("#boxGuide");
+const navTrackList = document.querySelector("#navTrackList");
+const byteSourceList = document.querySelector("#byteSourceList");
+const byteDump = document.querySelector("#byteDump");
+const byteDumpTitle = document.querySelector("#byteDumpTitle");
+const diagnosticList = document.querySelector("#diagnosticList");
 const selectedBoxMeta = document.querySelector("#selectedBoxMeta");
 const selectedBoxExplain = document.querySelector("#selectedBoxExplain");
 const selectedHexDump = document.querySelector("#selectedHexDump");
@@ -72,15 +77,18 @@ const glossary = [
 
 document.querySelectorAll(".tab").forEach((tab) => {
   tab.addEventListener("click", () => {
-    const view = tab.dataset.view;
-    document.querySelectorAll(".tab").forEach((item) => {
-      item.classList.toggle("active", item === tab);
-    });
-    document.querySelectorAll(".view").forEach((panel) => {
-      panel.classList.toggle("active", panel.id === `${view}View`);
-    });
+    activateView(tab.dataset.view);
   });
 });
+
+function activateView(view) {
+  document.querySelectorAll(".tab").forEach((item) => {
+    item.classList.toggle("active", item.dataset.view === view);
+  });
+  document.querySelectorAll(".view").forEach((panel) => {
+    panel.classList.toggle("active", panel.id === `${view}View`);
+  });
+}
 
 uploadForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -148,10 +156,13 @@ function render(payload) {
   renderInput(payload.input || {});
   renderEvidence(detection.evidence || []);
   renderLearning(payload, tracks);
+  renderDiagnostics(payload, tracks);
   renderTrackSummary(tracks);
+  renderNavTracks(tracks);
   renderTracks(tracks);
   renderStructure(container.structure || []);
   renderBoxGuide(container.structure || []);
+  renderByteSources(payload);
   jsonOutput.textContent = JSON.stringify(payload, null, 2);
 }
 
@@ -172,6 +183,47 @@ function renderEvidence(items) {
     const li = document.createElement("li");
     li.textContent = item;
     return li;
+  }));
+}
+
+function renderDiagnostics(payload, tracks) {
+  const detection = payload.detection || {};
+  const container = payload.container || {};
+  const diagnostics = [];
+  (container.warnings || []).forEach((warning) => {
+    diagnostics.push(["warn", warning]);
+  });
+  if (typeof detection.confidence === "number" && detection.confidence < 0.75) {
+    diagnostics.push(["warn", `low detection confidence: ${detection.confidence.toFixed(2)}`]);
+  }
+  if (detection.format === "iso-bmff" && !container.format) {
+    diagnostics.push(["error", "ISO-BMFF detected but container parser did not return a structure"]);
+  }
+  if (container.format && !tracks.length) {
+    diagnostics.push(["warn", "container parsed but no tracks were found"]);
+  }
+  tracks.forEach((track) => {
+    if (!track.codec || !track.codec.description) {
+      diagnostics.push(["warn", `track #${valueOrDash(track.id)} has no parsed codec description`]);
+    }
+    if (track.type === "video" && !(track.width || (track.codec && track.codec.width))) {
+      diagnostics.push(["info", `video track #${valueOrDash(track.id)} has no parsed width/height yet`]);
+    }
+  });
+
+  if (!diagnostics.length) {
+    diagnostics.push(["ok", "no basic diagnostics triggered"]);
+  }
+
+  diagnosticList.replaceChildren(...diagnostics.map(([level, text]) => {
+    const item = document.createElement("div");
+    item.className = `diagnostic ${level}`;
+    const badge = document.createElement("span");
+    const message = document.createElement("strong");
+    badge.textContent = level;
+    message.textContent = text;
+    item.append(badge, message);
+    return item;
   }));
 }
 
@@ -275,6 +327,25 @@ function renderTrackSummary(tracks) {
   }));
 }
 
+function renderNavTracks(tracks) {
+  if (!tracks.length) {
+    navTrackList.replaceChildren(emptyBlock("No tracks"));
+    return;
+  }
+  navTrackList.replaceChildren(...tracks.map((track, index) => {
+    const button = document.createElement("button");
+    button.className = "nav-item";
+    button.type = "button";
+    button.textContent = `#${valueOrDash(track.id)} ${valueOrDash(track.type)} · ${codecLabel(track.codec)}`;
+    button.addEventListener("click", () => {
+      activateView("tracks");
+      const target = document.querySelector(`[data-track-index="${index}"]`);
+      target?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return button;
+  }));
+}
+
 function renderTracks(tracks) {
   if (!tracks.length) {
     trackList.replaceChildren(emptyBlock("暂无轨道信息"));
@@ -285,12 +356,13 @@ function renderTracks(tracks) {
     ...tracks.map((track) => seconds(track.duration)).filter((value) => value > 0),
     1,
   );
-  trackList.replaceChildren(...tracks.map((track) => trackPanel(track, maxDuration)));
+  trackList.replaceChildren(...tracks.map((track, index) => trackPanel(track, maxDuration, index)));
 }
 
-function trackPanel(track, maxDuration) {
+function trackPanel(track, maxDuration, index) {
   const panel = document.createElement("article");
   panel.className = "track-panel";
+  panel.dataset.trackIndex = String(index);
 
   const head = document.createElement("div");
   head.className = "track-head";
@@ -463,6 +535,7 @@ function treeNode(node, open) {
     });
     summary.classList.add("selected");
     renderSelectedBox(node);
+    renderMainByteDump(node.type || "box", node.bytes || {});
   });
   details.append(summary);
 
@@ -496,6 +569,81 @@ function renderSelectedBox(node) {
   );
   selectedBoxExplain.innerHTML = `<strong>${escapeHtml(node.type || "box")}</strong><span>${escapeHtml(boxDescription(node.type))}</span>`;
   selectedHexDump.replaceChildren(hexDumpFromHex(byteInfo.hex || "", byteInfo.offset || 0, byteInfo.ascii || ""));
+}
+
+function renderByteSources(payload) {
+  const container = payload.container || {};
+  const tracks = Array.isArray(container.tracks) ? container.tracks : [];
+  const sources = [];
+  flattenBoxes(container.structure || []).forEach((node) => {
+    if (node.bytes && node.bytes.hex) {
+      sources.push({
+        label: `box ${node.type} @ ${node.offset}`,
+        title: `${node.type} box`,
+        bytes: node.bytes,
+      });
+    }
+  });
+  tracks.forEach((track) => {
+    const codec = track.codec || {};
+    [
+      ["Codec Header", codec.raw_header_hex],
+      ["VPS", codec.vps_hex],
+      ["SPS", codec.sps_hex],
+      ["PPS", codec.pps_hex],
+      ["ASC", codec.asc_hex],
+    ].forEach(([label, hex]) => {
+      if (hex) {
+        sources.push({
+          label: `track #${valueOrDash(track.id)} ${label}`,
+          title: `${codecLabel(codec)} · ${label}`,
+          bytes: { offset: 0, hex },
+        });
+      }
+    });
+  });
+
+  if (!sources.length) {
+    byteSourceList.replaceChildren(emptyBlock("No byte ranges"));
+    byteDumpTitle.textContent = "select box or codec bytes";
+    byteDump.replaceChildren(emptyBlock("No bytes"));
+    return;
+  }
+
+  byteSourceList.replaceChildren(...sources.map((source, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "byte-source";
+    button.textContent = source.label;
+    button.addEventListener("click", () => {
+      document.querySelectorAll(".byte-source.active").forEach((item) => item.classList.remove("active"));
+      button.classList.add("active");
+      renderMainByteDump(source.title, source.bytes);
+    });
+    if (index === 0) {
+      button.classList.add("active");
+    }
+    return button;
+  }));
+  renderMainByteDump(sources[0].title, sources[0].bytes);
+}
+
+function renderMainByteDump(title, bytes) {
+  byteDumpTitle.textContent = title || "bytes";
+  byteDump.replaceChildren(hexDumpFromHex(bytes.hex || "", bytes.offset || 0, bytes.ascii || ""));
+}
+
+function flattenBoxes(nodes) {
+  const out = [];
+  const visit = (node) => {
+    if (!node) {
+      return;
+    }
+    out.push(node);
+    (node.children || []).forEach(visit);
+  };
+  nodes.forEach(visit);
+  return out;
 }
 
 function renderBoxGuide(nodes) {
