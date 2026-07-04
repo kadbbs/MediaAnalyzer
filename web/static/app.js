@@ -16,12 +16,16 @@ const structureTree = document.querySelector("#structureTree");
 const boxGuide = document.querySelector("#boxGuide");
 const navTrackList = document.querySelector("#navTrackList");
 const byteSourceList = document.querySelector("#byteSourceList");
+const parsedOutline = document.querySelector("#parsedOutline");
 const byteDump = document.querySelector("#byteDump");
 const byteDumpTitle = document.querySelector("#byteDumpTitle");
 const diagnosticList = document.querySelector("#diagnosticList");
 const selectedBoxMeta = document.querySelector("#selectedBoxMeta");
 const selectedBoxExplain = document.querySelector("#selectedBoxExplain");
 const selectedHexDump = document.querySelector("#selectedHexDump");
+const bytesSelectionMeta = document.querySelector("#bytesSelectionMeta");
+const bytesSelectionExplain = document.querySelector("#bytesSelectionExplain");
+const bytesSelectedHexDump = document.querySelector("#bytesSelectedHexDump");
 const uploadForm = document.querySelector("#uploadForm");
 const urlForm = document.querySelector("#urlForm");
 const fileInput = document.querySelector("#fileInput");
@@ -82,6 +86,7 @@ document.querySelectorAll(".tab").forEach((tab) => {
 });
 
 function activateView(view) {
+  document.body.dataset.view = view;
   document.querySelectorAll(".tab").forEach((item) => {
     item.classList.toggle("active", item.dataset.view === view);
   });
@@ -89,6 +94,8 @@ function activateView(view) {
     panel.classList.toggle("active", panel.id === `${view}View`);
   });
 }
+
+activateView("bytes");
 
 uploadForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -163,13 +170,17 @@ function render(payload) {
   renderStructure(container.structure || []);
   renderBoxGuide(container.structure || []);
   renderByteSources(payload);
+  renderParsedOutline(payload);
   jsonOutput.textContent = JSON.stringify(payload, null, 2);
 }
 
 function renderInput(input) {
+  const byteInfo = input.bytes || {};
   const fields = [
     ["Name", input.name || "-"],
     ["Size", typeof input.size === "number" ? formatBytes(input.size) : "-"],
+    ["Bytes Loaded", typeof byteInfo.length === "number" ? formatBytes(byteInfo.length) : "-"],
+    ["Truncated", byteInfo.truncated ? "yes" : "no"],
   ];
   inputDetails.replaceChildren(...fields.map(([key, value]) => definitionRow(key, value)));
 }
@@ -535,7 +546,6 @@ function treeNode(node, open) {
     });
     summary.classList.add("selected");
     renderSelectedBox(node);
-    renderMainByteDump(node.type || "box", node.bytes || {});
   });
   details.append(summary);
 
@@ -551,30 +561,72 @@ function treeNode(node, open) {
 
 function renderSelectedBox(node) {
   if (!node) {
-    selectedBoxMeta.replaceChildren(definitionRow("Status", "No box selected"));
-    selectedBoxExplain.textContent = "选择左侧容器节点后，这里会显示解析说明和对应字节。";
+    const rows = [["Status", "No box selected"]];
+    const explanation = "选择左侧容器节点后，这里会显示解析说明和对应字节。";
+    selectedBoxMeta.replaceChildren(...rows.map(([key, value]) => definitionRow(key, value)));
+    selectedBoxExplain.textContent = explanation;
     selectedHexDump.replaceChildren(emptyBlock("暂无字节"));
+    renderInlineSelection(rows, `<span>${escapeHtml(explanation)}</span>`, null);
     return;
   }
 
   const byteInfo = node.bytes || {};
-  selectedBoxMeta.replaceChildren(
-    definitionRow("Type", node.type),
-    definitionRow("Offset", node.offset),
-    definitionRow("Size", node.size),
-    definitionRow("Header", node.header_size),
-    definitionRow("Preview Offset", byteInfo.offset),
-    definitionRow("Preview Length", byteInfo.length),
-    definitionRow("Truncated", byteInfo.truncated ? "yes" : "no"),
-  );
-  selectedBoxExplain.innerHTML = `<strong>${escapeHtml(node.type || "box")}</strong><span>${escapeHtml(boxDescription(node.type))}</span>`;
+  const rows = [
+    ["Type", node.type],
+    ["Offset", node.offset],
+    ["Size", node.size],
+    ["Header", node.header_size],
+    ["Preview Offset", byteInfo.offset],
+    ["Preview Length", byteInfo.length],
+    ["Truncated", byteInfo.truncated ? "yes" : "no"],
+  ];
+  const explanation = `<strong>${escapeHtml(node.type || "box")}</strong><span>${escapeHtml(boxDescription(node.type))}</span>`;
+  selectedBoxMeta.replaceChildren(...rows.map(([key, value]) => definitionRow(key, value)));
+  selectedBoxExplain.innerHTML = explanation;
   selectedHexDump.replaceChildren(hexDumpFromHex(byteInfo.hex || "", byteInfo.offset || 0, byteInfo.ascii || ""));
+  renderInlineSelection(rows, explanation, byteInfo);
+}
+
+function renderSelectedBytes(title, bytes, rows = [], explanation = "") {
+  const byteInfo = bytes || {};
+  const rowData = [
+    ["Selection", title || "bytes"],
+    ["Offset", valueOrDash(byteInfo.offset)],
+    ["Length", valueOrDash(byteInfo.length || hexByteLength(byteInfo.hex || ""))],
+    ["Truncated", byteInfo.truncated ? "yes" : "no"],
+    ...rows,
+  ];
+  const explanationHtml = `<strong>${escapeHtml(title || "bytes")}</strong><span>${escapeHtml(explanation || "这里显示右侧结构索引选中的局部字节；左侧始终保留整体输入二进制，方便按 offset 对照。")}</span>`;
+  selectedBoxMeta.replaceChildren(...rowData.map(([key, value]) => definitionRow(key, value)));
+  selectedBoxExplain.innerHTML = explanationHtml;
+  selectedHexDump.replaceChildren(hexDumpFromHex(byteInfo.hex || "", byteInfo.offset || 0, byteInfo.ascii || ""));
+  renderInlineSelection(rowData, explanationHtml, byteInfo);
+}
+
+function renderInlineSelection(rows, explanationHtml, bytes) {
+  if (!bytesSelectionMeta || !bytesSelectionExplain || !bytesSelectedHexDump) {
+    return;
+  }
+  bytesSelectionMeta.replaceChildren(...rows.map(([key, value]) => definitionRow(key, value)));
+  bytesSelectionExplain.innerHTML = explanationHtml || "";
+  if (!bytes || !bytes.hex) {
+    bytesSelectedHexDump.replaceChildren(emptyBlock("暂无字节"));
+    return;
+  }
+  bytesSelectedHexDump.replaceChildren(hexDumpFromHex(bytes.hex || "", bytes.offset || 0, bytes.ascii || ""));
 }
 
 function renderByteSources(payload) {
   const container = payload.container || {};
   const tracks = Array.isArray(container.tracks) ? container.tracks : [];
   const sources = [];
+  if (payload.input && payload.input.bytes && payload.input.bytes.hex) {
+    sources.push({
+      label: `input bytes @ 0 · ${formatBytes(payload.input.bytes.length || 0)}`,
+      title: `Input binary ${formatBytes(payload.input.bytes.length || 0)}${payload.input.bytes.truncated ? " (truncated)" : ""}`,
+      bytes: payload.input.bytes,
+    });
+  }
   flattenBoxes(container.structure || []).forEach((node) => {
     if (node.bytes && node.bytes.hex) {
       sources.push({
@@ -605,7 +657,7 @@ function renderByteSources(payload) {
 
   if (!sources.length) {
     byteSourceList.replaceChildren(emptyBlock("No byte ranges"));
-    byteDumpTitle.textContent = "select box or codec bytes";
+    byteDumpTitle.textContent = "input bytes";
     byteDump.replaceChildren(emptyBlock("No bytes"));
     return;
   }
@@ -618,19 +670,121 @@ function renderByteSources(payload) {
     button.addEventListener("click", () => {
       document.querySelectorAll(".byte-source.active").forEach((item) => item.classList.remove("active"));
       button.classList.add("active");
-      renderMainByteDump(source.title, source.bytes);
+      renderSelectedBytes(source.title, source.bytes, [["Range", source.label]]);
     });
     if (index === 0) {
       button.classList.add("active");
     }
     return button;
   }));
-  renderMainByteDump(sources[0].title, sources[0].bytes);
+
+  const inputSource = sources.find((source) => source.bytes === (payload.input && payload.input.bytes)) || sources[0];
+  renderMainByteDump(inputSource.title, inputSource.bytes);
+}
+
+function renderParsedOutline(payload) {
+  const container = payload.container || {};
+  const tracks = Array.isArray(container.tracks) ? container.tracks : [];
+  const items = [];
+
+  if (payload.input && payload.input.bytes) {
+    items.push(outlineLeaf("Input", `size ${formatBytes(payload.input.size || 0)}`, payload.input.bytes));
+  }
+  if (container.structure && container.structure.length) {
+    const details = document.createElement("details");
+    details.open = true;
+    const summary = document.createElement("summary");
+    summary.textContent = "Container boxes";
+    details.append(summary);
+    const body = document.createElement("div");
+    body.className = "outline-children";
+    container.structure.forEach((node) => body.append(outlineBox(node)));
+    details.append(body);
+    items.push(details);
+  }
+  if (tracks.length) {
+    const details = document.createElement("details");
+    details.open = true;
+    const summary = document.createElement("summary");
+    summary.textContent = "Tracks and codec headers";
+    details.append(summary);
+    const body = document.createElement("div");
+    body.className = "outline-children";
+    tracks.forEach((track) => body.append(outlineTrack(track)));
+    details.append(body);
+    items.push(details);
+  }
+
+  parsedOutline.replaceChildren(...(items.length ? items : [emptyBlock("No parsed ranges")]));
+}
+
+function outlineBox(node) {
+  const details = document.createElement("details");
+  details.open = false;
+  const summary = document.createElement("summary");
+  summary.textContent = `${node.type || "box"}  @${valueOrDash(node.offset)}  size ${valueOrDash(node.size)}`;
+  summary.addEventListener("click", () => {
+    renderSelectedBox(node);
+  });
+  details.append(summary);
+  const children = node.children || [];
+  if (children.length) {
+    const body = document.createElement("div");
+    body.className = "outline-children";
+    children.forEach((child) => body.append(outlineBox(child)));
+    details.append(body);
+  }
+  return details;
+}
+
+function outlineTrack(track) {
+  const details = document.createElement("details");
+  details.open = false;
+  const summary = document.createElement("summary");
+  summary.textContent = `track #${valueOrDash(track.id)} ${valueOrDash(track.type)} · ${codecLabel(track.codec)}`;
+  details.append(summary);
+  const body = document.createElement("div");
+  body.className = "outline-children";
+  const codec = track.codec || {};
+  [
+    ["Codec Header", codec.raw_header_hex],
+    ["VPS", codec.vps_hex],
+    ["SPS", codec.sps_hex],
+    ["PPS", codec.pps_hex],
+    ["AudioSpecificConfig", codec.asc_hex],
+  ].filter(([, hex]) => hex).forEach(([label, hex]) => {
+    body.append(outlineLeaf(label, codecLabel(codec), { offset: 0, hex }));
+  });
+  if (!body.children.length) {
+    body.append(emptyBlock("No codec byte ranges"));
+  }
+  details.append(body);
+  return details;
+}
+
+function outlineLeaf(label, meta, bytes) {
+  const button = document.createElement("button");
+  button.className = "outline-leaf";
+  button.type = "button";
+  button.innerHTML = `<strong>${escapeHtml(label)}</strong><span>${escapeHtml(meta || "")}</span>`;
+  button.addEventListener("click", () => {
+    document.querySelectorAll(".outline-leaf.active").forEach((item) => item.classList.remove("active"));
+    button.classList.add("active");
+    renderSelectedBytes(label, bytes || {}, [["Info", meta || "-"]]);
+  });
+  return button;
 }
 
 function renderMainByteDump(title, bytes) {
-  byteDumpTitle.textContent = title || "bytes";
+  byteDumpTitle.textContent = title || "input bytes";
   byteDump.replaceChildren(hexDumpFromHex(bytes.hex || "", bytes.offset || 0, bytes.ascii || ""));
+}
+
+function hexByteLength(hex) {
+  if (!hex) {
+    return 0;
+  }
+  return Math.floor(hex.replace(/\s+/g, "").length / 2);
 }
 
 function flattenBoxes(nodes) {

@@ -40,10 +40,10 @@
           <section class="nav-pane">
             <h2>Views</h2>
             <nav class="view-nav" role="tablist" aria-label="分析结果视图">
-              <button class="tab active" type="button" data-view="overview">Overview</button>
+              <button class="tab" type="button" data-view="overview">Overview</button>
               <button class="tab" type="button" data-view="tracks">Tracks / Codec</button>
               <button class="tab" type="button" data-view="structure">Container Tree</button>
-              <button class="tab" type="button" data-view="bytes">Bytes</button>
+              <button class="tab active" type="button" data-view="bytes">Bytes</button>
               <button class="tab" type="button" data-view="json">Raw JSON</button>
             </nav>
           </section>
@@ -88,7 +88,7 @@
             </div>
           </article>
 
-          <section class="view active" id="overviewView">
+          <section class="view" id="overviewView">
             <section class="overview-grid">
               <article class="panel">
                 <h2>Track Matrix</h2>
@@ -140,18 +140,31 @@
             </article>
           </section>
 
-          <section class="view" id="bytesView">
+          <section class="view active" id="bytesView">
             <section class="bytes-layout">
-              <article class="panel">
-                <h2>Byte Sources</h2>
-                <div class="nav-list" id="byteSourceList"></div>
-              </article>
-              <article class="panel">
+              <article class="panel binary-panel">
                 <div class="panel-head">
-                  <h2>Hex Dump</h2>
-                  <span id="byteDumpTitle">select box or codec bytes</span>
+                  <h2>Full Binary</h2>
+                  <span id="byteDumpTitle">input bytes</span>
                 </div>
                 <div class="hex-dump large-hex" id="byteDump"></div>
+              </article>
+              <article class="panel parsed-panel">
+                <div class="panel-head">
+                  <h2>Parsed Structures</h2>
+                  <span>collapsible index</span>
+                </div>
+                <div class="parsed-outline" id="parsedOutline"></div>
+                <details class="selection-drawer" open>
+                  <summary>Selection Detail</summary>
+                  <dl class="kv compact-kv" id="bytesSelectionMeta"></dl>
+                  <div class="explain" id="bytesSelectionExplain"></div>
+                  <div class="hex-dump compact-hex" id="bytesSelectedHexDump"></div>
+                </details>
+                <details class="range-drawer">
+                  <summary>Byte Ranges</summary>
+                  <div class="nav-list" id="byteSourceList"></div>
+                </details>
               </article>
             </section>
           </section>

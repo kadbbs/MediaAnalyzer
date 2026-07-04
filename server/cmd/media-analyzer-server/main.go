@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const maxProbeBytes int64 = 1024 * 1024
+const maxProbeBytes int64 = 16 * 1024 * 1024
 
 func main() {
 	mux := http.NewServeMux()

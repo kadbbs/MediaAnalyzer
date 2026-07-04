@@ -348,6 +348,13 @@ def main() -> int:
             actual_format = detection_format(actual)
             if actual_format != expected:
                 failures.append((name, expected, actual_format, actual))
+            if "input" in actual:
+                try:
+                    assert actual["input"]["bytes"]["offset"] == 0
+                    assert actual["input"]["bytes"]["length"] > 0
+                    assert actual["input"]["bytes"]["hex"]
+                except Exception as exc:
+                    failures.append((name, "input byte preview", f"error: {exc}", actual))
             if name == "video_avc1.mp4":
                 try:
                     track = actual["container"]["tracks"][0]

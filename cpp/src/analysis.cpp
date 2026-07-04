@@ -3,6 +3,7 @@
 #include "media_analyzer/format_detector.h"
 #include "media_analyzer/iso_bmff.h"
 
+#include <algorithm>
 #include <iomanip>
 #include <sstream>
 
@@ -46,6 +47,30 @@ std::string JsonEscape(std::string_view value) {
   return out.str();
 }
 
+std::string BytesToHex(const std::vector<std::uint8_t>& data, std::size_t length) {
+  std::ostringstream out;
+  const auto limit = std::min(data.size(), length);
+  for (std::size_t i = 0; i < limit; ++i) {
+    if (i != 0) {
+      out << ' ';
+    }
+    out << std::hex << std::setw(2) << std::setfill('0')
+        << static_cast<int>(data[i]);
+  }
+  return out.str();
+}
+
+std::string BytesToAscii(const std::vector<std::uint8_t>& data, std::size_t length) {
+  const auto limit = std::min(data.size(), length);
+  std::string out;
+  out.reserve(limit);
+  for (std::size_t i = 0; i < limit; ++i) {
+    const auto byte = data[i];
+    out.push_back(byte >= 0x20 && byte <= 0x7e ? static_cast<char>(byte) : '.');
+  }
+  return out;
+}
+
 }  // namespace
 
 std::string AnalyzeFileToJson(const std::vector<std::uint8_t>& data,
@@ -56,7 +81,16 @@ std::string AnalyzeFileToJson(const std::vector<std::uint8_t>& data,
   out << "{\n";
   out << "  \"input\": {\n";
   out << "    \"name\": \"" << JsonEscape(options.name_hint) << "\",\n";
-  out << "    \"size\": " << data.size() << "\n";
+  out << "    \"size\": " << data.size() << ",\n";
+  constexpr std::size_t kInputPreviewBytes = 16 * 1024 * 1024;
+  const auto preview_length = std::min(data.size(), kInputPreviewBytes);
+  out << "    \"bytes\": {\n";
+  out << "      \"offset\": 0,\n";
+  out << "      \"length\": " << preview_length << ",\n";
+  out << "      \"truncated\": " << (data.size() > preview_length ? "true" : "false") << ",\n";
+  out << "      \"hex\": \"" << JsonEscape(BytesToHex(data, preview_length)) << "\",\n";
+  out << "      \"ascii\": \"" << JsonEscape(BytesToAscii(data, preview_length)) << "\"\n";
+  out << "    }\n";
   out << "  },\n";
 
   std::string detection_json = DetectionToJson(detection);

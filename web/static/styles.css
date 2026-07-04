@@ -141,9 +141,17 @@ button:hover {
 
 .workbench {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) 380px;
+  grid-template-columns: 220px minmax(0, 1fr) 320px;
   gap: 8px;
   min-height: 0;
+}
+
+body[data-view="bytes"] .workbench {
+  grid-template-columns: 220px minmax(0, 1fr);
+}
+
+body[data-view="bytes"] .inspector {
+  display: none;
 }
 
 .navigator,
@@ -534,7 +542,120 @@ tbody tr:hover {
 }
 
 .bytes-layout {
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 340px;
+  align-items: start;
+}
+
+.binary-panel {
+  min-width: 0;
+}
+
+.parsed-panel {
+  position: sticky;
+  top: 0;
+  align-content: start;
+  max-height: calc(100vh - 128px);
+  overflow: hidden;
+}
+
+.parsed-outline {
+  display: grid;
+  gap: 4px;
+  max-height: calc(100vh - 250px);
+  overflow: auto;
+}
+
+.parsed-outline details {
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel-3);
+}
+
+.parsed-outline summary {
+  cursor: pointer;
+  padding: 7px 8px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.parsed-outline summary:hover {
+  background: var(--panel-2);
+}
+
+.outline-children {
+  display: grid;
+  gap: 4px;
+  border-top: 1px solid var(--line);
+  padding: 6px;
+}
+
+.outline-leaf {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text);
+  padding: 6px 7px;
+  text-align: left;
+}
+
+.outline-leaf:hover {
+  border-color: #9fb6c9;
+  background: #e5edf4;
+}
+
+.outline-leaf.active {
+  border-color: #0b6b66;
+  background: #d8ece9;
+}
+
+.outline-leaf strong {
+  font-size: 12px;
+}
+
+.outline-leaf span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.selection-drawer,
+.range-drawer {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.selection-drawer {
+  display: grid;
+  gap: 8px;
+  max-height: 270px;
+  overflow: auto;
+}
+
+.selection-drawer .compact-kv {
+  grid-template-columns: 96px minmax(0, 1fr);
+}
+
+.compact-hex {
+  min-height: 96px;
+  max-height: 160px;
+}
+
+.selection-drawer summary,
+.range-drawer summary {
+  cursor: pointer;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.range-drawer .nav-list {
+  margin-top: 8px;
+  max-height: 190px;
+  overflow: auto;
 }
 
 .tree {
@@ -641,6 +762,11 @@ tbody tr:hover {
 pre {
   min-height: 560px;
   max-height: calc(100vh - 210px);
+}
+
+.large-hex {
+  min-height: calc(100vh - 184px);
+  max-height: calc(100vh - 184px);
 }
 
 .hex-lines {
