@@ -396,6 +396,209 @@ std::string H264ProfileName(std::uint32_t profile_idc) {
   }
 }
 
+std::string HevcProfileName(std::uint32_t profile_idc) {
+  switch (profile_idc) {
+    case 1:
+      return "Main";
+    case 2:
+      return "Main 10";
+    case 3:
+      return "Main Still Picture";
+    case 4:
+      return "Range Extensions";
+    default:
+      return "profile_idc " + std::to_string(profile_idc);
+  }
+}
+
+std::string HevcLevelName(std::uint32_t level_idc) {
+  return std::to_string(level_idc / 30) + "." +
+         std::to_string((level_idc % 30) / 3);
+}
+
+std::string AacObjectTypeName(std::uint32_t object_type) {
+  switch (object_type) {
+    case 1:
+      return "AAC Main";
+    case 2:
+      return "AAC LC";
+    case 3:
+      return "AAC SSR";
+    case 4:
+      return "AAC LTP";
+    case 5:
+      return "HE-AAC SBR";
+    case 29:
+      return "HE-AAC v2 PS";
+    default:
+      return "AAC object type " + std::to_string(object_type);
+  }
+}
+
+std::uint32_t AacSampleRateFromIndex(std::uint32_t index) {
+  static constexpr std::array<std::uint32_t, 13> kRates = {
+      96000, 88200, 64000, 48000, 44100, 32000, 24000,
+      22050, 16000, 12000, 11025, 8000, 7350};
+  if (index < kRates.size()) {
+    return kRates[index];
+  }
+  return 0;
+}
+
+std::uint32_t ReadAacObjectType(BitReader& bits) {
+  auto object_type = bits.ReadBits(5);
+  if (object_type == 31) {
+    object_type = 32 + bits.ReadBits(6);
+  }
+  return object_type;
+}
+
+std::optional<CodecInfo> ParseAudioSpecificConfig(std::span<const std::uint8_t> asc,
+                                                  const std::string& fourcc) {
+  if (asc.empty()) {
+    return std::nullopt;
+  }
+  CodecInfo codec;
+  codec.fourcc = fourcc;
+  codec.description = "AAC";
+  codec.raw_header_hex = BytesToHex(asc.subspan(0, std::min<std::size_t>(asc.size(), kCodecPreviewBytes)));
+  codec.asc_hex = codec.raw_header_hex;
+
+  BitReader bits{asc};
+  const auto object_type = ReadAacObjectType(bits);
+  const auto sample_rate_index = bits.ReadBits(4);
+  std::uint32_t sample_rate = 0;
+  if (sample_rate_index == 0x0f) {
+    sample_rate = bits.ReadBits(24);
+  } else {
+    sample_rate = AacSampleRateFromIndex(sample_rate_index);
+  }
+  const auto channel_config = bits.ReadBits(4);
+
+  codec.audio_object_type = object_type;
+  codec.profile = AacObjectTypeName(object_type);
+  if (sample_rate != 0) {
+    codec.asc_sample_rate = sample_rate;
+  }
+  codec.channel_config = channel_config;
+  return codec;
+}
+
+std::optional<std::uint64_t> ReadDescriptorSize(std::span<const std::uint8_t> data,
+                                                std::uint64_t& offset,
+                                                std::uint64_t end) {
+  std::uint64_t size = 0;
+  for (int i = 0; i < 4; ++i) {
+    if (!CanRead(data, offset, 1) || offset >= end) {
+      return std::nullopt;
+    }
+    const auto byte = ReadU8(data, offset++);
+    size = (size << 7) | (byte & 0x7f);
+    if ((byte & 0x80) == 0) {
+      return size;
+    }
+  }
+  return size;
+}
+
+std::optional<CodecInfo> ParseEsdsAac(std::span<const std::uint8_t> data,
+                                      std::uint64_t payload,
+                                      std::uint64_t size,
+                                      const std::string& fourcc) {
+  if (!CanRead(data, payload, size) || size < 4) {
+    return std::nullopt;
+  }
+  const auto end = payload + size;
+  for (std::uint64_t candidate = payload + 4; candidate + 2 <= end; ++candidate) {
+    if (ReadU8(data, candidate) != 0x05) {
+      continue;
+    }
+    std::uint64_t offset = candidate + 1;
+    auto desc_size = ReadDescriptorSize(data, offset, end);
+    if (desc_size && *desc_size > 0 && offset + *desc_size <= end) {
+      auto asc = ByteSpan(data, offset, *desc_size);
+      auto codec = ParseAudioSpecificConfig(asc, fourcc);
+      if (codec.has_value()) {
+        codec->raw_header_hex =
+            BytesToHex(ByteSpan(data, payload, std::min<std::uint64_t>(size, kCodecPreviewBytes)));
+      }
+      return codec;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<CodecInfo> ParseHvcC(std::span<const std::uint8_t> data,
+                                   std::uint64_t payload,
+                                   std::uint64_t size,
+                                   const std::string& fourcc) {
+  if (!CanRead(data, payload, size) || size < 23) {
+    return std::nullopt;
+  }
+
+  CodecInfo codec;
+  codec.fourcc = fourcc;
+  codec.description = CodecDescription(fourcc);
+  codec.raw_header_hex =
+      BytesToHex(ByteSpan(data, payload, std::min<std::uint64_t>(size, kCodecPreviewBytes)));
+
+  const auto profile_byte = ReadU8(data, payload + 1);
+  const auto profile_space = (profile_byte >> 6) & 0x03;
+  const auto tier_flag = (profile_byte >> 5) & 0x01;
+  const auto profile_idc = profile_byte & 0x1f;
+  const auto level_idc = ReadU8(data, payload + 12);
+  codec.profile = HevcProfileName(profile_idc);
+  if (profile_space != 0) {
+    codec.profile += " profile_space " + std::to_string(profile_space);
+  }
+  codec.level = (tier_flag ? "High tier " : "Main tier ") + HevcLevelName(level_idc);
+  codec.chroma_format = ReadU8(data, payload + 16) & 0x03;
+  codec.bit_depth_luma = (ReadU8(data, payload + 17) & 0x07) + 8;
+  codec.bit_depth_chroma = (ReadU8(data, payload + 18) & 0x07) + 8;
+  codec.length_size = (ReadU8(data, payload + 21) & 0x03) + 1;
+
+  std::uint64_t offset = payload + 23;
+  const auto array_count = ReadU8(data, payload + 22);
+  std::uint32_t vps_count = 0;
+  std::uint32_t sps_count = 0;
+  std::uint32_t pps_count = 0;
+  for (std::uint32_t array_index = 0; array_index < array_count && offset + 3 <= payload + size;
+       ++array_index) {
+    const auto nal_type = ReadU8(data, offset++) & 0x3f;
+    const auto nal_count = ReadBe16(data, offset);
+    offset += 2;
+    for (std::uint32_t i = 0; i < nal_count && offset + 2 <= payload + size; ++i) {
+      const auto nal_size = ReadBe16(data, offset);
+      offset += 2;
+      if (!CanRead(data, offset, nal_size) || offset + nal_size > payload + size) {
+        return codec;
+      }
+      const auto nal_hex = BytesToHex(ByteSpan(data, offset, nal_size));
+      if (nal_type == 32) {
+        ++vps_count;
+        if (codec.vps_hex.empty()) {
+          codec.vps_hex = nal_hex;
+        }
+      } else if (nal_type == 33) {
+        ++sps_count;
+        if (codec.sps_hex.empty()) {
+          codec.sps_hex = nal_hex;
+        }
+      } else if (nal_type == 34) {
+        ++pps_count;
+        if (codec.pps_hex.empty()) {
+          codec.pps_hex = nal_hex;
+        }
+      }
+      offset += nal_size;
+    }
+  }
+  codec.vps_count = vps_count;
+  codec.sps_count = sps_count;
+  codec.pps_count = pps_count;
+  return codec;
+}
+
 std::optional<CodecInfo> ParseAvcC(std::span<const std::uint8_t> data,
                                    std::uint64_t payload,
                                    std::uint64_t size,
@@ -660,9 +863,9 @@ void ParseStsd(std::span<const std::uint8_t> data, const StructureNode& stsd, Tr
   }
 
   for (const auto& child : entry.children) {
+    const auto payload_offset = child.offset + child.header_size;
+    const auto payload_size = child.size - child.header_size;
     if (child.type == "avcC") {
-      const auto payload_offset = child.offset + child.header_size;
-      const auto payload_size = child.size - child.header_size;
       auto codec = ParseAvcC(data, payload_offset, payload_size, entry.type);
       if (codec.has_value()) {
         track.codec = *codec;
@@ -671,6 +874,22 @@ void ParseStsd(std::span<const std::uint8_t> data, const StructureNode& stsd, Tr
         }
         if (!track.height && codec->height) {
           track.height = codec->height;
+        }
+      }
+    } else if (child.type == "hvcC") {
+      auto codec = ParseHvcC(data, payload_offset, payload_size, entry.type);
+      if (codec.has_value()) {
+        track.codec = *codec;
+      }
+    } else if (child.type == "esds") {
+      auto codec = ParseEsdsAac(data, payload_offset, payload_size, entry.type);
+      if (codec.has_value()) {
+        track.codec = *codec;
+        if (codec->asc_sample_rate) {
+          track.sample_rate = codec->asc_sample_rate;
+        }
+        if (codec->channel_config) {
+          track.channel_count = codec->channel_config;
         }
       }
     }
@@ -777,11 +996,22 @@ void WriteCodecJson(std::ostringstream& out, const CodecInfo& codec, int indent)
   WriteOptionalU32(out, "width", codec.width, indent + 2, needs_comma);
   WriteOptionalU32(out, "height", codec.height, indent + 2, needs_comma);
   WriteOptionalU32(out, "length_size", codec.length_size, indent + 2, needs_comma);
+  WriteOptionalU32(out, "vps_count", codec.vps_count, indent + 2, needs_comma);
   WriteOptionalU32(out, "sps_count", codec.sps_count, indent + 2, needs_comma);
   WriteOptionalU32(out, "pps_count", codec.pps_count, indent + 2, needs_comma);
+  WriteOptionalU32(out, "bit_depth_luma", codec.bit_depth_luma, indent + 2, needs_comma);
+  WriteOptionalU32(out, "bit_depth_chroma", codec.bit_depth_chroma, indent + 2, needs_comma);
+  WriteOptionalU32(out, "chroma_format", codec.chroma_format, indent + 2, needs_comma);
+  WriteOptionalU32(out, "audio_object_type", codec.audio_object_type, indent + 2, needs_comma);
+  WriteOptionalU32(out, "asc_sample_rate", codec.asc_sample_rate, indent + 2, needs_comma);
+  WriteOptionalU32(out, "channel_config", codec.channel_config, indent + 2, needs_comma);
   if (!codec.raw_header_hex.empty()) {
     out << ",\n" << Indent(indent + 2) << "\"raw_header_hex\": \""
         << JsonEscape(codec.raw_header_hex) << "\"";
+  }
+  if (!codec.vps_hex.empty()) {
+    out << ",\n" << Indent(indent + 2) << "\"vps_hex\": \""
+        << JsonEscape(codec.vps_hex) << "\"";
   }
   if (!codec.sps_hex.empty()) {
     out << ",\n" << Indent(indent + 2) << "\"sps_hex\": \""
@@ -790,6 +1020,10 @@ void WriteCodecJson(std::ostringstream& out, const CodecInfo& codec, int indent)
   if (!codec.pps_hex.empty()) {
     out << ",\n" << Indent(indent + 2) << "\"pps_hex\": \""
         << JsonEscape(codec.pps_hex) << "\"";
+  }
+  if (!codec.asc_hex.empty()) {
+    out << ",\n" << Indent(indent + 2) << "\"asc_hex\": \""
+        << JsonEscape(codec.asc_hex) << "\"";
   }
   out << "\n" << Indent(indent) << "}";
 }

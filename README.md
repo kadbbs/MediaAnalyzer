@@ -16,8 +16,10 @@ MediaAnalyzer 是一个 Web 媒体结构分析工具。目标是通过上传文�
 - C++ CLI：输出完整分析报告，包含 `input`、`detection` 和容器解析结果。
 - ISO-BMFF/MP4：解析 box 树、`ftyp`、`mvhd`、`trak/mdia/stbl/stsd`、sample entry 和 sample count。
 - H.264/AVC：解析 `avcC`，进一步解析 SPS/PPS 数量、NAL length size、profile、level 和 SPS 分辨率。
+- H.265/HEVC：解析 `hvcC`，输出 profile、tier、level、NAL length size、VPS/SPS/PPS 数量、bit depth、chroma format 和参数集字节。
+- AAC：解析 `esds` 中的 AudioSpecificConfig，输出 audio object type、采样率、声道配置和 ASC 字节。
 - Go server：提供 `/api/analyze` 文件上传和 URL 分析入口，并调用 C++ core 返回完整报告。
-- Python golden test：生成小样本并验证格式识别、MP4 容器解析和 H.264 header 解析。
+- Python golden test：生成小样本并验证格式识别、MP4 容器解析，以及 H.264、HEVC、AAC header 解析。
 - Web UI：上传文件或输入 URL，默认展示可视化总览、轨道与编码、容器结构树，并保留原始 JSON 视图。
 
 ## 构建 C++ 核心

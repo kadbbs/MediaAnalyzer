@@ -34,11 +34,20 @@ struct CodecInfo {
   std::optional<std::uint32_t> width;
   std::optional<std::uint32_t> height;
   std::optional<std::uint32_t> length_size;
+  std::optional<std::uint32_t> vps_count;
   std::optional<std::uint32_t> sps_count;
   std::optional<std::uint32_t> pps_count;
+  std::optional<std::uint32_t> bit_depth_luma;
+  std::optional<std::uint32_t> bit_depth_chroma;
+  std::optional<std::uint32_t> chroma_format;
+  std::optional<std::uint32_t> audio_object_type;
+  std::optional<std::uint32_t> asc_sample_rate;
+  std::optional<std::uint32_t> channel_config;
   std::string raw_header_hex;
+  std::string vps_hex;
   std::string sps_hex;
   std::string pps_hex;
+  std::string asc_hex;
 };
 
 struct TrackInfo {

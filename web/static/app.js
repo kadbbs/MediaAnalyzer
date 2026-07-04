@@ -64,6 +64,8 @@ const glossary = [
   ["Timescale", "时间单位刻度。duration / timescale = 秒。MP4 里 movie 和 track 可以有不同 timescale。"],
   ["DTS/PTS", "DTS 是解码时间，PTS 是显示时间。含 B 帧的视频里二者可能不同。"],
   ["SPS/PPS", "H.264 参数集。SPS 描述分辨率/profile/level 等序列参数，PPS 描述图像参数。"],
+  ["VPS/SPS/PPS", "HEVC/H.265 使用 VPS、SPS、PPS 三类参数集，VPS 描述视频参数集合，SPS/PPS 描述序列和图像参数。"],
+  ["AudioSpecificConfig", "AAC 的初始化配置，通常来自 MP4 的 esds，包含音频对象类型、采样率和声道配置。"],
   ["Extradata", "容器里保存的 codec 初始化数据，例如 avcC、hvcC、AudioSpecificConfig。"],
   ["关键帧", "可以独立解码的帧。播放器 seek、切片和首屏速度都很依赖关键帧位置。"],
 ];
@@ -332,8 +334,15 @@ function trackPanel(track, maxDuration) {
     ["Profile", codecInfo.profile],
     ["Level", codecInfo.level],
     ["NAL Length", codecInfo.length_size],
+    ["VPS", codecInfo.vps_count],
     ["SPS", codecInfo.sps_count],
     ["PPS", codecInfo.pps_count],
+    ["Bit Depth Luma", codecInfo.bit_depth_luma],
+    ["Bit Depth Chroma", codecInfo.bit_depth_chroma],
+    ["Chroma Format", codecInfo.chroma_format],
+    ["Audio Object", codecInfo.audio_object_type],
+    ["ASC Rate", codecInfo.asc_sample_rate],
+    ["Channel Config", codecInfo.channel_config],
     ["Time Scale", track.duration && track.duration.timescale],
     ["Samples", track.sample_count],
     ["Sample Entries", track.sample_description_count],
@@ -363,8 +372,10 @@ function trackPanel(track, maxDuration) {
 function codecBytePanel(codecInfo) {
   const sections = [
     ["Codec Header", codecInfo.raw_header_hex],
+    ["VPS", codecInfo.vps_hex],
     ["SPS", codecInfo.sps_hex],
     ["PPS", codecInfo.pps_hex],
+    ["AudioSpecificConfig", codecInfo.asc_hex],
   ].filter(([, hex]) => hex);
   if (!sections.length) {
     return null;
@@ -402,6 +413,13 @@ function codecExplanations(track) {
     rows.push(["avcC", "MP4 中 H.264 常把 SPS/PPS 放在 avcC box 中。sample 内的 NALU 通常用 length 前缀分隔，而不是 Annex B start code。"]);
     rows.push(["SPS/PPS", `当前解析到 ${valueOrDash(codec.sps_count)} 个 SPS、${valueOrDash(codec.pps_count)} 个 PPS。SPS 决定 profile、level、分辨率等关键解码参数。`]);
     rows.push(["Profile/Level", `${valueOrDash(codec.profile)} / ${valueOrDash(codec.level)} 描述编码工具集和复杂度上限，兼容性排查时很重要。`]);
+  } else if (codec.description === "H.265/HEVC") {
+    rows.push(["hvcC", "MP4 中 HEVC/H.265 常通过 hvcC 携带 VPS/SPS/PPS、profile、tier、level、bit depth 和 NAL length size。"]);
+    rows.push(["VPS/SPS/PPS", `当前解析到 ${valueOrDash(codec.vps_count)} 个 VPS、${valueOrDash(codec.sps_count)} 个 SPS、${valueOrDash(codec.pps_count)} 个 PPS。排查 HEVC 兼容性时这些参数集很关键。`]);
+    rows.push(["Profile/Tier/Level", `${valueOrDash(codec.profile)} / ${valueOrDash(codec.level)} 描述编码工具、tier 和复杂度等级。`]);
+  } else if (codec.description === "AAC") {
+    rows.push(["esds", "MP4 中 AAC 常在 esds 里携带 AudioSpecificConfig，而不是把初始化参数放到每个音频 sample 里。"]);
+    rows.push(["AudioSpecificConfig", `当前解析到 objectType=${valueOrDash(codec.audio_object_type)}，sampleRate=${valueOrDash(codec.asc_sample_rate)}，channelConfig=${valueOrDash(codec.channel_config)}。`]);
   } else if (codec.description) {
     rows.push(["Codec", `${codec.description} 是这条轨道的编码格式。后续 parser 会继续补充该 codec 的 header 字段。`]);
   }
