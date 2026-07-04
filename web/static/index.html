@@ -115,12 +115,21 @@
         <section class="view" id="structureView">
           <section class="structure-layout">
             <article class="panel">
-              <h2>Box Tree</h2>
+              <h2>Container Tree</h2>
               <div class="tree" id="structureTree"></div>
             </article>
-            <aside class="panel">
-              <h2>节点说明</h2>
-              <div class="box-guide" id="boxGuide"></div>
+            <aside class="panel inspector">
+              <h2>Inspector</h2>
+              <dl class="kv compact-kv" id="selectedBoxMeta"></dl>
+              <div class="explain" id="selectedBoxExplain"></div>
+              <div>
+                <h2>Hex Dump</h2>
+                <div class="hex-dump" id="selectedHexDump"></div>
+              </div>
+              <div>
+                <h2>Box Reference</h2>
+                <div class="box-guide" id="boxGuide"></div>
+              </div>
             </aside>
           </section>
         </section>

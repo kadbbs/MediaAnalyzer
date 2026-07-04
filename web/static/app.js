@@ -14,6 +14,9 @@ const trackSummaryRows = document.querySelector("#trackSummaryRows");
 const trackList = document.querySelector("#trackList");
 const structureTree = document.querySelector("#structureTree");
 const boxGuide = document.querySelector("#boxGuide");
+const selectedBoxMeta = document.querySelector("#selectedBoxMeta");
+const selectedBoxExplain = document.querySelector("#selectedBoxExplain");
+const selectedHexDump = document.querySelector("#selectedHexDump");
 const uploadForm = document.querySelector("#uploadForm");
 const urlForm = document.querySelector("#urlForm");
 const fileInput = document.querySelector("#fileInput");
@@ -348,7 +351,39 @@ function trackPanel(track, maxDuration) {
     explanations.append(explain(title, text));
   });
 
+  const codecBytes = codecBytePanel(codecInfo);
+
   panel.append(head, timeline, fields, explanations);
+  if (codecBytes) {
+    panel.append(codecBytes);
+  }
+  return panel;
+}
+
+function codecBytePanel(codecInfo) {
+  const sections = [
+    ["Codec Header", codecInfo.raw_header_hex],
+    ["SPS", codecInfo.sps_hex],
+    ["PPS", codecInfo.pps_hex],
+  ].filter(([, hex]) => hex);
+  if (!sections.length) {
+    return null;
+  }
+
+  const panel = document.createElement("div");
+  panel.className = "byte-panel";
+  const title = document.createElement("h2");
+  title.textContent = "Codec Bytes";
+  panel.append(title);
+  sections.forEach(([label, hex]) => {
+    const block = document.createElement("div");
+    block.className = "byte-section";
+    const heading = document.createElement("div");
+    heading.className = "byte-heading";
+    heading.textContent = label;
+    block.append(heading, hexDumpFromHex(hex, 0));
+    panel.append(block);
+  });
   return panel;
 }
 
@@ -379,9 +414,11 @@ function codecExplanations(track) {
 function renderStructure(nodes) {
   if (!nodes.length) {
     structureTree.replaceChildren(emptyBlock("暂无容器结构"));
+    renderSelectedBox(null);
     return;
   }
-  structureTree.replaceChildren(...nodes.map((node) => treeNode(node, true)));
+  structureTree.replaceChildren(...nodes.map((node, index) => treeNode(node, index === 0)));
+  renderSelectedBox(nodes[0]);
 }
 
 function treeNode(node, open) {
@@ -402,6 +439,13 @@ function treeNode(node, open) {
   note.className = "box-note";
   note.textContent = `header ${valueOrDash(node.header_size)} · ${boxDescription(node.type)}`;
   summary.append(type, offset, size, note);
+  summary.addEventListener("click", () => {
+    document.querySelectorAll(".tree summary.selected").forEach((item) => {
+      item.classList.remove("selected");
+    });
+    summary.classList.add("selected");
+    renderSelectedBox(node);
+  });
   details.append(summary);
 
   const children = Array.isArray(node.children) ? node.children : [];
@@ -412,6 +456,28 @@ function treeNode(node, open) {
     details.append(childWrap);
   }
   return details;
+}
+
+function renderSelectedBox(node) {
+  if (!node) {
+    selectedBoxMeta.replaceChildren(definitionRow("Status", "No box selected"));
+    selectedBoxExplain.textContent = "选择左侧容器节点后，这里会显示解析说明和对应字节。";
+    selectedHexDump.replaceChildren(emptyBlock("暂无字节"));
+    return;
+  }
+
+  const byteInfo = node.bytes || {};
+  selectedBoxMeta.replaceChildren(
+    definitionRow("Type", node.type),
+    definitionRow("Offset", node.offset),
+    definitionRow("Size", node.size),
+    definitionRow("Header", node.header_size),
+    definitionRow("Preview Offset", byteInfo.offset),
+    definitionRow("Preview Length", byteInfo.length),
+    definitionRow("Truncated", byteInfo.truncated ? "yes" : "no"),
+  );
+  selectedBoxExplain.innerHTML = `<strong>${escapeHtml(node.type || "box")}</strong><span>${escapeHtml(boxDescription(node.type))}</span>`;
+  selectedHexDump.replaceChildren(hexDumpFromHex(byteInfo.hex || "", byteInfo.offset || 0, byteInfo.ascii || ""));
 }
 
 function renderBoxGuide(nodes) {
@@ -451,6 +517,53 @@ function uniqueBoxTypes(nodes) {
 
 function boxDescription(type) {
   return boxDescriptions[type] || "暂未内置说明。专家可先根据 offset/size 和父子层级判断它在容器中的作用。";
+}
+
+function hexDumpFromHex(hex, baseOffset, asciiHint = "") {
+  const bytes = hexToBytes(hex);
+  const wrap = document.createElement("div");
+  wrap.className = "hex-lines";
+  if (!bytes.length) {
+    wrap.append(emptyBlock("暂无字节"));
+    return wrap;
+  }
+
+  for (let offset = 0; offset < bytes.length; offset += 16) {
+    const slice = bytes.slice(offset, offset + 16);
+    const line = document.createElement("div");
+    line.className = "hex-line";
+
+    const address = document.createElement("span");
+    address.className = "hex-address";
+    address.textContent = toHexOffset(Number(baseOffset || 0) + offset);
+
+    const hexBytes = document.createElement("span");
+    hexBytes.className = "hex-bytes";
+    hexBytes.textContent = slice.map((byte) => byte.toString(16).padStart(2, "0")).join(" ");
+
+    const ascii = document.createElement("span");
+    ascii.className = "hex-ascii";
+    ascii.textContent = asciiHint
+      ? asciiHint.slice(offset, offset + 16).padEnd(16, " ")
+      : slice.map((byte) => byte >= 0x20 && byte <= 0x7e ? String.fromCharCode(byte) : ".").join("");
+
+    line.append(address, hexBytes, ascii);
+    wrap.append(line);
+  }
+  return wrap;
+}
+
+function hexToBytes(hex) {
+  return String(hex || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => Number.parseInt(part, 16))
+    .filter((value) => Number.isFinite(value));
+}
+
+function toHexOffset(value) {
+  return `0x${Math.max(0, value).toString(16).padStart(8, "0")}`;
 }
 
 function definitionRow(key, value) {

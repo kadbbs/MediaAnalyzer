@@ -199,6 +199,10 @@ def main() -> int:
                     assert track["codec"]["profile"]
                     assert track["codec"]["sps_count"] == 1
                     assert track["codec"]["pps_count"] == 1
+                    assert track["codec"]["raw_header_hex"].startswith("01 64 00 1f")
+                    assert track["codec"]["sps_hex"].startswith("67 64 00 1f")
+                    assert track["codec"]["pps_hex"].startswith("68 eb")
+                    assert actual["container"]["structure"][0]["bytes"]["hex"].startswith("00 00 00")
                 except Exception as exc:
                     failures.append((name, "parsed AVC track", f"error: {exc}", actual))
 

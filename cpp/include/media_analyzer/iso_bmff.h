@@ -13,6 +13,11 @@ struct StructureNode {
   std::uint64_t offset = 0;
   std::uint64_t size = 0;
   std::uint64_t header_size = 0;
+  std::string hex_preview;
+  std::string ascii_preview;
+  std::uint64_t preview_offset = 0;
+  std::uint64_t preview_length = 0;
+  bool preview_truncated = false;
   std::vector<StructureNode> children;
 };
 
@@ -31,6 +36,9 @@ struct CodecInfo {
   std::optional<std::uint32_t> length_size;
   std::optional<std::uint32_t> sps_count;
   std::optional<std::uint32_t> pps_count;
+  std::string raw_header_hex;
+  std::string sps_hex;
+  std::string pps_hex;
 };
 
 struct TrackInfo {
@@ -60,4 +68,3 @@ std::optional<IsoBmffAnalysis> ParseIsoBmff(std::span<const std::uint8_t> data);
 std::string IsoBmffAnalysisToJson(const IsoBmffAnalysis& analysis, int indent = 2);
 
 }  // namespace media_analyzer
-

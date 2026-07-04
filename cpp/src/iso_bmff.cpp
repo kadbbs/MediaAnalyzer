@@ -18,6 +18,9 @@ struct BoxHeader {
   bool valid = false;
 };
 
+constexpr std::uint64_t kBoxPreviewBytes = 160;
+constexpr std::uint64_t kCodecPreviewBytes = 256;
+
 std::string JsonEscape(std::string_view value) {
   std::ostringstream out;
   for (unsigned char c : value) {
@@ -59,9 +62,40 @@ std::string Indent(int count) {
   return std::string(static_cast<std::size_t>(count), ' ');
 }
 
+std::string BytesToHex(std::span<const std::uint8_t> bytes) {
+  std::ostringstream out;
+  for (std::size_t i = 0; i < bytes.size(); ++i) {
+    if (i != 0) {
+      out << ' ';
+    }
+    out << std::hex << std::setw(2) << std::setfill('0')
+        << static_cast<int>(bytes[i]);
+  }
+  return out.str();
+}
+
+std::string BytesToAscii(std::span<const std::uint8_t> bytes) {
+  std::string out;
+  out.reserve(bytes.size());
+  for (auto byte : bytes) {
+    out.push_back(byte >= 0x20 && byte <= 0x7e ? static_cast<char>(byte) : '.');
+  }
+  return out;
+}
+
 bool CanRead(std::span<const std::uint8_t> data, std::uint64_t offset,
              std::uint64_t length) {
   return offset <= data.size() && length <= data.size() - offset;
+}
+
+std::span<const std::uint8_t> ByteSpan(std::span<const std::uint8_t> data,
+                                       std::uint64_t offset,
+                                       std::uint64_t length) {
+  if (!CanRead(data, offset, length)) {
+    return {};
+  }
+  return std::span<const std::uint8_t>(&data[static_cast<std::size_t>(offset)],
+                                       static_cast<std::size_t>(length));
 }
 
 std::uint8_t ReadU8(std::span<const std::uint8_t> data, std::uint64_t offset) {
@@ -194,6 +228,12 @@ StructureNode ParseBoxNode(std::span<const std::uint8_t> data, const BoxHeader& 
   node.offset = header.offset;
   node.size = header.size;
   node.header_size = header.header_size;
+  node.preview_offset = header.offset;
+  node.preview_length = std::min<std::uint64_t>(header.size, kBoxPreviewBytes);
+  node.preview_truncated = header.size > node.preview_length;
+  const auto preview = ByteSpan(data, node.preview_offset, node.preview_length);
+  node.hex_preview = BytesToHex(preview);
+  node.ascii_preview = BytesToAscii(preview);
 
   if (depth <= 0) {
     return node;
@@ -367,6 +407,8 @@ std::optional<CodecInfo> ParseAvcC(std::span<const std::uint8_t> data,
   CodecInfo codec;
   codec.fourcc = fourcc;
   codec.description = CodecDescription(fourcc);
+  codec.raw_header_hex =
+      BytesToHex(ByteSpan(data, payload, std::min<std::uint64_t>(size, kCodecPreviewBytes)));
   const auto profile_idc = ReadU8(data, payload + 1);
   const auto level_idc = ReadU8(data, payload + 3);
   codec.profile = H264ProfileName(profile_idc);
@@ -384,6 +426,7 @@ std::optional<CodecInfo> ParseAvcC(std::span<const std::uint8_t> data,
     if (CanRead(data, offset, sps_size) && sps_size > 1) {
       std::span<const std::uint8_t> nal(&data[static_cast<std::size_t>(offset)],
                                         static_cast<std::size_t>(sps_size));
+      codec.sps_hex = BytesToHex(nal);
       if ((nal[0] & 0x1f) == 7) {
         nal = nal.subspan(1);
       }
@@ -483,6 +526,14 @@ std::optional<CodecInfo> ParseAvcC(std::span<const std::uint8_t> data,
   }
   if (CanRead(data, offset, 1)) {
     codec.pps_count = ReadU8(data, offset);
+    ++offset;
+    if (*codec.pps_count > 0 && CanRead(data, offset, 2)) {
+      const auto pps_size = ReadBe16(data, offset);
+      offset += 2;
+      if (CanRead(data, offset, pps_size)) {
+        codec.pps_hex = BytesToHex(ByteSpan(data, offset, pps_size));
+      }
+    }
   }
   return codec;
 }
@@ -674,7 +725,15 @@ void WriteStructureJson(std::ostringstream& out, const StructureNode& node, int 
   out << Indent(indent + 2) << "\"type\": \"" << JsonEscape(node.type) << "\",\n";
   out << Indent(indent + 2) << "\"offset\": " << node.offset << ",\n";
   out << Indent(indent + 2) << "\"size\": " << node.size << ",\n";
-  out << Indent(indent + 2) << "\"header_size\": " << node.header_size;
+  out << Indent(indent + 2) << "\"header_size\": " << node.header_size << ",\n";
+  out << Indent(indent + 2) << "\"bytes\": {\n";
+  out << Indent(indent + 4) << "\"offset\": " << node.preview_offset << ",\n";
+  out << Indent(indent + 4) << "\"length\": " << node.preview_length << ",\n";
+  out << Indent(indent + 4) << "\"truncated\": "
+      << (node.preview_truncated ? "true" : "false") << ",\n";
+  out << Indent(indent + 4) << "\"hex\": \"" << JsonEscape(node.hex_preview) << "\",\n";
+  out << Indent(indent + 4) << "\"ascii\": \"" << JsonEscape(node.ascii_preview) << "\"\n";
+  out << Indent(indent + 2) << "}";
   if (!node.children.empty()) {
     out << ",\n" << Indent(indent + 2) << "\"children\": [\n";
     for (std::size_t i = 0; i < node.children.size(); ++i) {
@@ -720,6 +779,18 @@ void WriteCodecJson(std::ostringstream& out, const CodecInfo& codec, int indent)
   WriteOptionalU32(out, "length_size", codec.length_size, indent + 2, needs_comma);
   WriteOptionalU32(out, "sps_count", codec.sps_count, indent + 2, needs_comma);
   WriteOptionalU32(out, "pps_count", codec.pps_count, indent + 2, needs_comma);
+  if (!codec.raw_header_hex.empty()) {
+    out << ",\n" << Indent(indent + 2) << "\"raw_header_hex\": \""
+        << JsonEscape(codec.raw_header_hex) << "\"";
+  }
+  if (!codec.sps_hex.empty()) {
+    out << ",\n" << Indent(indent + 2) << "\"sps_hex\": \""
+        << JsonEscape(codec.sps_hex) << "\"";
+  }
+  if (!codec.pps_hex.empty()) {
+    out << ",\n" << Indent(indent + 2) << "\"pps_hex\": \""
+        << JsonEscape(codec.pps_hex) << "\"";
+  }
   out << "\n" << Indent(indent) << "}";
 }
 
