@@ -427,6 +427,7 @@ if (!dictionaries[locale]) {
 }
 let currentPayload = null;
 let currentStatus = { key: "status.ready", params: {}, raw: null, isError: false };
+let activeByteRange = null;
 
 function t(key, params = {}) {
   const source = dictionaries[locale] || dictionaries["zh-CN"];
@@ -973,6 +974,7 @@ function renderSelectedBox(node) {
     selectedBoxExplain.textContent = explanation;
     selectedHexDump.replaceChildren(emptyBlock(t("empty.noBytes")));
     renderInlineSelection(rows, `<span>${escapeHtml(explanation)}</span>`, null);
+    selectMappedRange(null);
     return;
   }
 
@@ -991,9 +993,10 @@ function renderSelectedBox(node) {
   selectedBoxExplain.innerHTML = explanation;
   selectedHexDump.replaceChildren(hexDumpFromHex(byteInfo.hex || "", byteInfo.offset || 0, byteInfo.ascii || ""));
   renderInlineSelection(rows, explanation, byteInfo);
+  selectMappedRange(boxRange(node));
 }
 
-function renderSelectedBytes(title, bytes, rows = [], explanation = "") {
+function renderSelectedBytes(title, bytes, rows = [], explanation = "", mapRange = null) {
   const byteInfo = bytes || {};
   const rowData = [
     [t("field.selection"), title || "bytes"],
@@ -1007,6 +1010,7 @@ function renderSelectedBytes(title, bytes, rows = [], explanation = "") {
   selectedBoxExplain.innerHTML = explanationHtml;
   selectedHexDump.replaceChildren(hexDumpFromHex(byteInfo.hex || "", byteInfo.offset || 0, byteInfo.ascii || ""));
   renderInlineSelection(rowData, explanationHtml, byteInfo);
+  selectMappedRange(mapRange);
 }
 
 function renderInlineSelection(rows, explanationHtml, bytes) {
@@ -1031,6 +1035,7 @@ function renderByteSources(payload) {
       label: `${t("label.inputBytes")} @ 0 · ${formatBytes(payload.input.bytes.length || 0)}`,
       title: `${t("label.inputBinary")} ${formatBytes(payload.input.bytes.length || 0)}${payload.input.bytes.truncated ? ` (${t("field.truncated")})` : ""}`,
       bytes: payload.input.bytes,
+      mapRange: byteRange(payload.input.bytes),
     });
   }
   flattenBoxes(container.structure || []).forEach((node) => {
@@ -1039,6 +1044,7 @@ function renderByteSources(payload) {
         label: `${t("label.box")} ${node.type} @ ${node.offset}`,
         title: `${node.type} ${t("label.box")}`,
         bytes: node.bytes,
+        mapRange: boxRange(node),
       });
     }
   });
@@ -1076,7 +1082,7 @@ function renderByteSources(payload) {
     button.addEventListener("click", () => {
       document.querySelectorAll(".byte-source.active").forEach((item) => item.classList.remove("active"));
       button.classList.add("active");
-      renderSelectedBytes(source.title, source.bytes, [[t("field.range"), source.label]]);
+      renderSelectedBytes(source.title, source.bytes, [[t("field.range"), source.label]], "", source.mapRange || null);
     });
     if (index === 0) {
       button.classList.add("active");
@@ -1094,7 +1100,12 @@ function renderParsedOutline(payload) {
   const items = [];
 
   if (payload.input && payload.input.bytes) {
-    items.push(outlineLeaf(t("label.input"), `${t("label.size")} ${formatBytes(payload.input.size || 0)}`, payload.input.bytes));
+    items.push(outlineLeaf(
+      t("label.input"),
+      `${t("label.size")} ${formatBytes(payload.input.size || 0)}`,
+      payload.input.bytes,
+      byteRange(payload.input.bytes),
+    ));
   }
   if (container.structure && container.structure.length) {
     const details = document.createElement("details");
@@ -1130,6 +1141,7 @@ function outlineBox(node) {
   const summary = document.createElement("summary");
   summary.textContent = `${node.type || "box"}  @${valueOrDash(node.offset)}  ${t("label.size")} ${valueOrDash(node.size)}`;
   summary.addEventListener("click", () => {
+    markOutlineSelection(summary);
     renderSelectedBox(node);
   });
   details.append(summary);
@@ -1168,15 +1180,14 @@ function outlineTrack(track) {
   return details;
 }
 
-function outlineLeaf(label, meta, bytes) {
+function outlineLeaf(label, meta, bytes, mapRange = null) {
   const button = document.createElement("button");
   button.className = "outline-leaf";
   button.type = "button";
   button.innerHTML = `<strong>${escapeHtml(label)}</strong><span>${escapeHtml(meta || "")}</span>`;
   button.addEventListener("click", () => {
-    document.querySelectorAll(".outline-leaf.active").forEach((item) => item.classList.remove("active"));
-    button.classList.add("active");
-    renderSelectedBytes(label, bytes || {}, [[t("field.info"), meta || "-"]]);
+    markOutlineSelection(button);
+    renderSelectedBytes(label, bytes || {}, [[t("field.info"), meta || "-"]], "", mapRange);
   });
   return button;
 }
@@ -1184,6 +1195,88 @@ function outlineLeaf(label, meta, bytes) {
 function renderMainByteDump(title, bytes) {
   byteDumpTitle.textContent = title || t("label.inputBytes");
   byteDump.replaceChildren(hexDumpFromHex(bytes.hex || "", bytes.offset || 0, bytes.ascii || ""));
+  highlightMappedRange(false);
+}
+
+function markOutlineSelection(target) {
+  document.querySelectorAll(".outline-leaf.active, .parsed-outline summary.outline-selected").forEach((item) => {
+    item.classList.remove("active", "outline-selected");
+  });
+  if (target.matches("summary")) {
+    target.classList.add("outline-selected");
+  } else {
+    target.classList.add("active");
+  }
+}
+
+function boxRange(node) {
+  if (!node) {
+    return null;
+  }
+  return normalizedRange(node.offset, node.size);
+}
+
+function byteRange(bytes) {
+  if (!bytes) {
+    return null;
+  }
+  return normalizedRange(bytes.offset, bytes.length || hexByteLength(bytes.hex || ""));
+}
+
+function normalizedRange(offset, length) {
+  const start = Number(offset);
+  const size = Number(length);
+  if (!Number.isFinite(start) || !Number.isFinite(size) || size <= 0) {
+    return null;
+  }
+  return {
+    offset: Math.max(0, Math.floor(start)),
+    length: Math.max(1, Math.floor(size)),
+  };
+}
+
+function selectMappedRange(range) {
+  activeByteRange = range;
+  highlightMappedRange(true);
+}
+
+function highlightMappedRange(shouldScroll) {
+  byteDump.querySelectorAll(".hex-line.mapped, .hex-byte.mapped, .ascii-byte.mapped").forEach((item) => {
+    item.classList.remove("mapped");
+  });
+  if (!activeByteRange) {
+    return;
+  }
+
+  const rangeStart = activeByteRange.offset;
+  const rangeEnd = rangeStart + activeByteRange.length;
+  let firstMapped = null;
+
+  byteDump.querySelectorAll(".hex-line").forEach((line) => {
+    const lineStart = Number(line.dataset.lineStart);
+    const lineEnd = Number(line.dataset.lineEnd);
+    if (!Number.isFinite(lineStart) || !Number.isFinite(lineEnd) || lineEnd <= rangeStart || lineStart >= rangeEnd) {
+      return;
+    }
+
+    line.classList.add("mapped");
+    if (!firstMapped) {
+      firstMapped = line;
+    }
+    line.querySelectorAll(".hex-byte, .ascii-byte").forEach((byte) => {
+      const offset = Number(byte.dataset.offset);
+      if (offset >= rangeStart && offset < rangeEnd) {
+        byte.classList.add("mapped");
+        if (!firstMapped) {
+          firstMapped = byte;
+        }
+      }
+    });
+  });
+
+  if (shouldScroll && firstMapped) {
+    firstMapped.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+  }
 }
 
 function hexByteLength(hex) {
@@ -1257,22 +1350,41 @@ function hexDumpFromHex(hex, baseOffset, asciiHint = "") {
 
   for (let offset = 0; offset < bytes.length; offset += 16) {
     const slice = bytes.slice(offset, offset + 16);
+    const lineStart = Number(baseOffset || 0) + offset;
     const line = document.createElement("div");
     line.className = "hex-line";
+    line.dataset.lineStart = String(lineStart);
+    line.dataset.lineEnd = String(lineStart + slice.length);
 
     const address = document.createElement("span");
     address.className = "hex-address";
-    address.textContent = toHexOffset(Number(baseOffset || 0) + offset);
+    address.textContent = toHexOffset(lineStart);
 
     const hexBytes = document.createElement("span");
     hexBytes.className = "hex-bytes";
-    hexBytes.textContent = slice.map((byte) => byte.toString(16).padStart(2, "0")).join(" ");
+    slice.forEach((byte, index) => {
+      if (index > 0) {
+        hexBytes.append(document.createTextNode(" "));
+      }
+      const byteCell = document.createElement("span");
+      byteCell.className = "hex-byte";
+      byteCell.dataset.offset = String(lineStart + index);
+      byteCell.textContent = byte.toString(16).padStart(2, "0");
+      hexBytes.append(byteCell);
+    });
 
     const ascii = document.createElement("span");
     ascii.className = "hex-ascii";
-    ascii.textContent = asciiHint
-      ? asciiHint.slice(offset, offset + 16).padEnd(16, " ")
+    const asciiText = asciiHint
+      ? asciiHint.slice(offset, offset + 16).padEnd(slice.length, " ")
       : slice.map((byte) => byte >= 0x20 && byte <= 0x7e ? String.fromCharCode(byte) : ".").join("");
+    slice.forEach((byte, index) => {
+      const asciiCell = document.createElement("span");
+      asciiCell.className = "ascii-byte";
+      asciiCell.dataset.offset = String(lineStart + index);
+      asciiCell.textContent = asciiText[index] || ".";
+      ascii.append(asciiCell);
+    });
 
     line.append(address, hexBytes, ascii);
     wrap.append(line);

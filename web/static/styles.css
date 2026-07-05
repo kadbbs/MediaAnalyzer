@@ -800,8 +800,18 @@ pre {
   display: grid;
   grid-template-columns: 90px 1fr 140px;
   gap: 12px;
+  border-radius: 2px;
   min-width: 620px;
+  padding: 1px 3px;
   white-space: pre;
+}
+
+.hex-line.mapped {
+  background: rgba(49, 95, 156, .22);
+}
+
+.hex-line.mapped .hex-address {
+  color: #c8ddff;
 }
 
 .hex-address {
@@ -810,6 +820,17 @@ pre {
 
 .hex-bytes {
   color: #e6edf3;
+}
+
+.hex-byte,
+.ascii-byte {
+  border-radius: 2px;
+}
+
+.hex-byte.mapped,
+.ascii-byte.mapped {
+  background: #ffd166;
+  color: #171a1f;
 }
 
 .hex-ascii {
