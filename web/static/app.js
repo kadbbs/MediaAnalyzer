@@ -119,6 +119,7 @@ const dictionaries = {
     "field.previewOffset": "预览偏移",
     "field.previewLength": "预览长度",
     "field.range": "范围",
+    "field.mappedRange": "映射范围",
     "field.info": "信息",
     "value.yes": "是",
     "value.no": "否",
@@ -263,6 +264,7 @@ const dictionaries = {
     "field.previewOffset": "Preview Offset",
     "field.previewLength": "Preview Length",
     "field.range": "Range",
+    "field.mappedRange": "Mapped Range",
     "field.info": "Info",
     "value.yes": "yes",
     "value.no": "no",
@@ -988,6 +990,7 @@ function renderSelectedBox(node) {
     [t("field.type"), node.type],
     [t("field.offset"), node.offset],
     [t("field.size"), node.size],
+    [t("field.mappedRange"), formatMappedRange(boxRange(node))],
     [t("field.header"), node.header_size],
     [t("field.previewOffset"), byteInfo.offset],
     [t("field.previewLength"), byteInfo.length],
@@ -1008,6 +1011,7 @@ function renderSelectedBytes(title, bytes, rows = [], explanation = "", mapRange
     [t("field.offset"), valueOrDash(byteInfo.offset)],
     [t("field.length"), valueOrDash(byteInfo.length || hexByteLength(byteInfo.hex || ""))],
     [t("field.truncated"), yesNo(byteInfo.truncated)],
+    ...(mapRange ? [[t("field.mappedRange"), formatMappedRange(mapRange)]] : []),
     ...rows,
   ];
   const explanationHtml = `<strong>${escapeHtml(title || "bytes")}</strong><span>${escapeHtml(explanation || t("selection.bytesExplanation"))}</span>`;
@@ -1055,6 +1059,7 @@ function renderByteSources(payload) {
   });
   tracks.forEach((track) => {
     const codec = track.codec || {};
+    const codecRange = codecHeaderRange(codec);
     [
       [t("label.codecHeader"), codec.raw_header_hex],
       ["VPS", codec.vps_hex],
@@ -1067,6 +1072,7 @@ function renderByteSources(payload) {
           label: `${t("label.track")} #${valueOrDash(track.id)} ${label}`,
           title: `${codecLabel(codec)} · ${label}`,
           bytes: { offset: 0, hex },
+          mapRange: codecRange,
         });
       }
     });
@@ -1169,6 +1175,7 @@ function outlineTrack(track) {
   const body = document.createElement("div");
   body.className = "outline-children";
   const codec = track.codec || {};
+  const codecRange = codecHeaderRange(codec);
   [
     [t("label.codecHeader"), codec.raw_header_hex],
     ["VPS", codec.vps_hex],
@@ -1176,7 +1183,7 @@ function outlineTrack(track) {
     ["PPS", codec.pps_hex],
     [t("label.audioSpecificConfig"), codec.asc_hex],
   ].filter(([, hex]) => hex).forEach(([label, hex]) => {
-    body.append(outlineLeaf(label, codecLabel(codec), { offset: 0, hex }));
+    body.append(outlineLeaf(label, codecLabel(codec), { offset: 0, hex }, codecRange));
   });
   if (!body.children.length) {
     body.append(emptyBlock(t("empty.noCodecByteRanges")));
@@ -1237,6 +1244,20 @@ function normalizedRange(offset, length) {
     offset: Math.max(0, Math.floor(start)),
     length: Math.max(1, Math.floor(size)),
   };
+}
+
+function formatMappedRange(range) {
+  if (!range) {
+    return "-";
+  }
+  return `@${range.offset} (${toHexOffset(range.offset)}) + ${range.length}`;
+}
+
+function codecHeaderRange(codec) {
+  if (!codec || !codec.raw_header_bytes) {
+    return null;
+  }
+  return normalizedRange(codec.raw_header_bytes.offset, codec.raw_header_bytes.length);
 }
 
 function selectMappedRange(range) {

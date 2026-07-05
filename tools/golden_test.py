@@ -368,6 +368,8 @@ def main() -> int:
                     assert track["codec"]["sps_count"] == 1
                     assert track["codec"]["pps_count"] == 1
                     assert track["codec"]["raw_header_hex"].startswith("01 64 00 1f")
+                    assert track["codec"]["raw_header_bytes"]["offset"] > 0
+                    assert track["codec"]["raw_header_bytes"]["length"] > 8
                     assert track["codec"]["sps_hex"].startswith("67 64 00 1f")
                     assert track["codec"]["pps_hex"].startswith("68 eb")
                     assert actual["container"]["structure"][0]["bytes"]["hex"].startswith("00 00 00")
@@ -392,6 +394,8 @@ def main() -> int:
                     assert codec["bit_depth_chroma"] == 8
                     assert codec["chroma_format"] == 1
                     assert codec["vps_hex"].startswith("40 01")
+                    assert codec["raw_header_bytes"]["offset"] > 0
+                    assert codec["raw_header_bytes"]["length"] > 8
                 except Exception as exc:
                     failures.append((name, "parsed HEVC track", f"error: {exc}", actual))
             if name == "audio_aac.mp4":
@@ -408,6 +412,8 @@ def main() -> int:
                     assert codec["asc_sample_rate"] == 44100
                     assert codec["channel_config"] == 2
                     assert codec["asc_hex"] == "12 10"
+                    assert codec["raw_header_bytes"]["offset"] > 0
+                    assert codec["raw_header_bytes"]["length"] > 8
                 except Exception as exc:
                     failures.append((name, "parsed AAC track", f"error: {exc}", actual))
 

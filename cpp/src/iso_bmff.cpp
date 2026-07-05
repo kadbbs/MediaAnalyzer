@@ -868,6 +868,7 @@ void ParseStsd(std::span<const std::uint8_t> data, const StructureNode& stsd, Tr
     if (child.type == "avcC") {
       auto codec = ParseAvcC(data, payload_offset, payload_size, entry.type);
       if (codec.has_value()) {
+        codec->raw_header_bytes = ByteRange{child.offset, child.size};
         track.codec = *codec;
         if (!track.width && codec->width) {
           track.width = codec->width;
@@ -879,11 +880,13 @@ void ParseStsd(std::span<const std::uint8_t> data, const StructureNode& stsd, Tr
     } else if (child.type == "hvcC") {
       auto codec = ParseHvcC(data, payload_offset, payload_size, entry.type);
       if (codec.has_value()) {
+        codec->raw_header_bytes = ByteRange{child.offset, child.size};
         track.codec = *codec;
       }
     } else if (child.type == "esds") {
       auto codec = ParseEsdsAac(data, payload_offset, payload_size, entry.type);
       if (codec.has_value()) {
+        codec->raw_header_bytes = ByteRange{child.offset, child.size};
         track.codec = *codec;
         if (codec->asc_sample_rate) {
           track.sample_rate = codec->asc_sample_rate;
@@ -1008,6 +1011,12 @@ void WriteCodecJson(std::ostringstream& out, const CodecInfo& codec, int indent)
   if (!codec.raw_header_hex.empty()) {
     out << ",\n" << Indent(indent + 2) << "\"raw_header_hex\": \""
         << JsonEscape(codec.raw_header_hex) << "\"";
+  }
+  if (codec.raw_header_bytes) {
+    out << ",\n" << Indent(indent + 2) << "\"raw_header_bytes\": {\n";
+    out << Indent(indent + 4) << "\"offset\": " << codec.raw_header_bytes->offset << ",\n";
+    out << Indent(indent + 4) << "\"length\": " << codec.raw_header_bytes->length << "\n";
+    out << Indent(indent + 2) << "}";
   }
   if (!codec.vps_hex.empty()) {
     out << ",\n" << Indent(indent + 2) << "\"vps_hex\": \""

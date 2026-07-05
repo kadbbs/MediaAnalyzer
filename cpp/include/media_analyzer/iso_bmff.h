@@ -26,6 +26,11 @@ struct RationalTime {
   std::uint32_t timescale = 0;
 };
 
+struct ByteRange {
+  std::uint64_t offset = 0;
+  std::uint64_t length = 0;
+};
+
 struct CodecInfo {
   std::string fourcc;
   std::string description;
@@ -48,6 +53,7 @@ struct CodecInfo {
   std::string sps_hex;
   std::string pps_hex;
   std::string asc_hex;
+  std::optional<ByteRange> raw_header_bytes;
 };
 
 struct TrackInfo {
