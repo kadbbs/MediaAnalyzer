@@ -23,7 +23,7 @@ FIXTURES = {
     "sample.flac": b"fLaC\x00\x00\x00\x22",
     "sample.flv": b"FLV\x01\x05\x00\x00\x00\x09",
     "sample.mp3": b"ID3\x04\x00\x00\x00\x00\x00\x00",
-    "sample.aac": b"\xff\xf1\x50\x80\x00\x1f\xfc",
+    "sample.aac": b"\xff\xf1\x50\x80\x00\xff\xfc",
     "sample.h264": b"\x00\x00\x00\x01\x67\x64\x00\x1f",
     "playlist.m3u8": b"#EXTM3U\n#EXT-X-VERSION:3\n",
     "manifest.mpd": b'<?xml version="1.0"?><MPD xmlns="urn:mpeg:dash:schema:mpd:2011"></MPD>',
@@ -216,6 +216,7 @@ def hdlr_box(handler: bytes, name: bytes) -> bytes:
 
 def make_video_hvc1_mp4() -> bytes:
     ftyp = box(b"ftyp", b"isom" + be32(512) + b"isomiso2hvc1mp41")
+    sample_payload = bytes(range(32))
     vps = bytes.fromhex("40 01 0c 01 ff ff 01 60")
     sps = bytes.fromhex("42 01 01 01 60 00 00 03 00 90")
     pps = bytes.fromhex("44 01 c0 f1 83")
@@ -252,18 +253,29 @@ def make_video_hvc1_mp4() -> bytes:
         + hvcc
     )
     hvc1 = box(b"hvc1", hvc1_payload)
-    stsd = fullbox(b"stsd", be32(1) + hvc1)
-    stsz = fullbox(b"stsz", be32(0) + be32(1) + be32(4321))
-    stbl = box(b"stbl", stsd + stsz)
-    minf = box(b"minf", stbl)
-    mdia = box(
-        b"mdia",
-        fullbox(b"mdhd", be32(0) + be32(0) + be32(90000) + be32(180000) + be16(0x55C4) + be16(0))
-        + hdlr_box(b"vide", b"VideoHandler")
-        + minf,
-    )
-    trak = box(b"trak", tkhd_box(1, 2000, 1280, 720) + mdia)
-    return ftyp + box(b"moov", mvhd_box() + trak)
+
+    def build_moov(chunk_offset: int) -> bytes:
+        stsd = fullbox(b"stsd", be32(1) + hvc1)
+        stts = fullbox(b"stts", be32(1) + be32(1) + be32(3000))
+        stsc = fullbox(b"stsc", be32(1) + be32(1) + be32(1) + be32(1))
+        stsz = fullbox(b"stsz", be32(0) + be32(1) + be32(len(sample_payload)))
+        stco = fullbox(b"stco", be32(1) + be32(chunk_offset))
+        stss = fullbox(b"stss", be32(1) + be32(1))
+        stbl = box(b"stbl", stsd + stts + stsc + stsz + stco + stss)
+        minf = box(b"minf", stbl)
+        mdia = box(
+            b"mdia",
+            fullbox(b"mdhd", be32(0) + be32(0) + be32(90000) + be32(180000) + be16(0x55C4) + be16(0))
+            + hdlr_box(b"vide", b"VideoHandler")
+            + minf,
+        )
+        trak = box(b"trak", tkhd_box(1, 2000, 1280, 720) + mdia)
+        return box(b"moov", mvhd_box() + trak)
+
+    mdat = box(b"mdat", sample_payload)
+    moov = build_moov(0)
+    moov = build_moov(len(ftyp) + len(moov) + 8)
+    return ftyp + moov + mdat
 
 
 def descriptor(tag: int, payload: bytes) -> bytes:
@@ -372,6 +384,8 @@ def main() -> int:
                     assert track["codec"]["raw_header_bytes"]["length"] > 8
                     assert track["codec"]["sps_hex"].startswith("67 64 00 1f")
                     assert track["codec"]["pps_hex"].startswith("68 eb")
+                    assert track["codec"]["sps_bytes"]["length"] > 4
+                    assert track["codec"]["pps_bytes"]["length"] > 2
                     assert actual["container"]["structure"][0]["bytes"]["hex"].startswith("00 00 00")
                 except Exception as exc:
                     failures.append((name, "parsed AVC track", f"error: {exc}", actual))
@@ -396,6 +410,20 @@ def main() -> int:
                     assert codec["vps_hex"].startswith("40 01")
                     assert codec["raw_header_bytes"]["offset"] > 0
                     assert codec["raw_header_bytes"]["length"] > 8
+                    assert codec["vps_bytes"]["length"] == 8
+                    assert codec["sps_bytes"]["length"] == 10
+                    assert codec["pps_bytes"]["length"] == 5
+                    assert track["sample_table_total"] == 1
+                    assert track["sample_table_truncated"] is False
+                    sample = track["samples"][0]
+                    assert sample["index"] == 1
+                    assert sample["size"] == 32
+                    assert sample["duration"] == 3000
+                    assert sample["dts"] == 0
+                    assert sample["pts"] == 0
+                    assert sample["sync"] is True
+                    assert sample["bytes"]["offset"] == sample["offset"]
+                    assert sample["bytes"]["length"] == 32
                 except Exception as exc:
                     failures.append((name, "parsed HEVC track", f"error: {exc}", actual))
             if name == "audio_aac.mp4":
@@ -414,8 +442,43 @@ def main() -> int:
                     assert codec["asc_hex"] == "12 10"
                     assert codec["raw_header_bytes"]["offset"] > 0
                     assert codec["raw_header_bytes"]["length"] > 8
+                    assert codec["asc_bytes"]["length"] == 2
                 except Exception as exc:
                     failures.append((name, "parsed AAC track", f"error: {exc}", actual))
+            if name == "sample.ts":
+                try:
+                    assert actual["container"]["format"] == "MPEG-TS"
+                    assert actual["container"]["packet_count"] == 3
+                    assert actual["container"]["packets"][0]["offset"] == 0
+                    assert actual["container"]["packets"][0]["length"] == 188
+                    assert actual["container"]["packets"][0]["sync"] is True
+                except Exception as exc:
+                    failures.append((name, "parsed MPEG-TS packets", f"error: {exc}", actual))
+            if name == "sample.webm":
+                try:
+                    assert actual["container"]["format"] == "Matroska/WebM"
+                    assert actual["container"]["element_count"] >= 1
+                    assert actual["container"]["elements"][0]["id_value"] == 0x1A45DFA3
+                except Exception as exc:
+                    failures.append((name, "parsed EBML elements", f"error: {exc}", actual))
+            if name == "sample.aac":
+                try:
+                    frame = actual["bitstream"]["frames"][0]
+                    assert actual["bitstream"]["format"] == "ADTS AAC"
+                    assert frame["offset"] == 0
+                    assert frame["length"] == 7
+                    assert frame["sample_rate"] == 44100
+                    assert frame["channel_config"] == 2
+                except Exception as exc:
+                    failures.append((name, "parsed ADTS frame", f"error: {exc}", actual))
+            if name == "sample.h264":
+                try:
+                    nalu = actual["bitstream"]["nal_units"][0]
+                    assert actual["bitstream"]["format"] == "Annex B H.264"
+                    assert nalu["offset"] == 4
+                    assert nalu["nal_type"] == 7
+                except Exception as exc:
+                    failures.append((name, "parsed Annex B NAL units", f"error: {exc}", actual))
 
         if failures:
             for name, expected, actual, detail in failures:

@@ -31,6 +31,18 @@ struct ByteRange {
   std::uint64_t length = 0;
 };
 
+struct SampleInfo {
+  std::uint32_t index = 0;
+  std::uint64_t offset = 0;
+  std::uint32_t size = 0;
+  std::uint64_t dts = 0;
+  std::int64_t pts = 0;
+  std::uint32_t duration = 0;
+  std::int64_t composition_offset = 0;
+  bool sync = true;
+  std::optional<ByteRange> bytes;
+};
+
 struct CodecInfo {
   std::string fourcc;
   std::string description;
@@ -54,6 +66,10 @@ struct CodecInfo {
   std::string pps_hex;
   std::string asc_hex;
   std::optional<ByteRange> raw_header_bytes;
+  std::optional<ByteRange> vps_bytes;
+  std::optional<ByteRange> sps_bytes;
+  std::optional<ByteRange> pps_bytes;
+  std::optional<ByteRange> asc_bytes;
 };
 
 struct TrackInfo {
@@ -66,6 +82,9 @@ struct TrackInfo {
   std::optional<std::uint32_t> sample_rate;
   std::uint32_t sample_count = 0;
   std::uint32_t sample_description_count = 0;
+  bool sample_table_truncated = false;
+  std::uint32_t sample_table_total = 0;
+  std::vector<SampleInfo> samples;
   CodecInfo codec;
 };
 

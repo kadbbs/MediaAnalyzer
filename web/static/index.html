@@ -14,6 +14,11 @@
           <p data-i18n="app.subtitle">Container / Timeline / Codec Header / Bytes Inspector</p>
         </div>
         <div class="title-actions">
+          <label for="modeSelect" data-i18n="label.mode">Mode</label>
+          <select id="modeSelect" aria-label="Mode">
+            <option value="learning">Learning</option>
+            <option value="expert">Expert</option>
+          </select>
           <label for="languageSelect" data-i18n="label.language">Language</label>
           <select id="languageSelect" aria-label="Language">
             <option value="zh-CN">简体中文</option>
@@ -121,12 +126,12 @@
                 <dl class="kv" id="expertFacts"></dl>
               </article>
 
-              <article class="panel">
+              <article class="panel learning-panel">
                 <h2 data-i18n="panel.learningNotes">Learning Notes</h2>
                 <ol class="insight-list" id="beginnerInsights"></ol>
               </article>
 
-              <article class="panel">
+              <article class="panel glossary-panel">
                 <h2 data-i18n="panel.glossary">Glossary</h2>
                 <div class="glossary-list" id="glossaryList"></div>
               </article>

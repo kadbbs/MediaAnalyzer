@@ -146,6 +146,11 @@ select {
   background: var(--chrome-2);
 }
 
+body[data-mode="expert"] .learning-panel,
+body[data-mode="expert"] .glossary-panel {
+  display: none;
+}
+
 button {
   min-height: 32px;
   border: 1px solid #0a5e59;
@@ -554,6 +559,59 @@ tbody tr:hover {
   padding-top: 10px;
 }
 
+.sample-panel {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.compact-table table {
+  min-width: 680px;
+}
+
+.sample-row {
+  cursor: pointer;
+}
+
+.sample-row:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+  background: #dcecea;
+}
+
+.sample-timeline {
+  position: relative;
+  height: 22px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel-2);
+}
+
+.sample-marker {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  min-width: 3px;
+  min-height: 0;
+  border: 0;
+  border-radius: 1px;
+  background: var(--accent-2);
+  padding: 0;
+}
+
+.sample-marker.sync {
+  background: var(--accent);
+}
+
+.sample-marker:hover,
+.sample-marker:focus {
+  outline: 1px solid #ffd166;
+  outline-offset: 0;
+  background: #1f7fbd;
+}
+
 .structure-layout,
 .bytes-layout {
   display: grid;
@@ -838,6 +896,7 @@ pre {
 .hex-byte,
 .ascii-byte {
   border-radius: 2px;
+  cursor: pointer;
 }
 
 .hex-byte.mapped,

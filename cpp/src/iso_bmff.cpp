@@ -20,6 +20,7 @@ struct BoxHeader {
 
 constexpr std::uint64_t kBoxPreviewBytes = 160;
 constexpr std::uint64_t kCodecPreviewBytes = 256;
+constexpr std::uint32_t kSampleOutputLimit = 5000;
 
 std::string JsonEscape(std::string_view value) {
   std::ostringstream out;
@@ -521,6 +522,7 @@ std::optional<CodecInfo> ParseEsdsAac(std::span<const std::uint8_t> data,
       if (codec.has_value()) {
         codec->raw_header_hex =
             BytesToHex(ByteSpan(data, payload, std::min<std::uint64_t>(size, kCodecPreviewBytes)));
+        codec->asc_bytes = ByteRange{offset, *desc_size};
       }
       return codec;
     }
@@ -578,16 +580,19 @@ std::optional<CodecInfo> ParseHvcC(std::span<const std::uint8_t> data,
         ++vps_count;
         if (codec.vps_hex.empty()) {
           codec.vps_hex = nal_hex;
+          codec.vps_bytes = ByteRange{offset, nal_size};
         }
       } else if (nal_type == 33) {
         ++sps_count;
         if (codec.sps_hex.empty()) {
           codec.sps_hex = nal_hex;
+          codec.sps_bytes = ByteRange{offset, nal_size};
         }
       } else if (nal_type == 34) {
         ++pps_count;
         if (codec.pps_hex.empty()) {
           codec.pps_hex = nal_hex;
+          codec.pps_bytes = ByteRange{offset, nal_size};
         }
       }
       offset += nal_size;
@@ -630,6 +635,7 @@ std::optional<CodecInfo> ParseAvcC(std::span<const std::uint8_t> data,
       std::span<const std::uint8_t> nal(&data[static_cast<std::size_t>(offset)],
                                         static_cast<std::size_t>(sps_size));
       codec.sps_hex = BytesToHex(nal);
+      codec.sps_bytes = ByteRange{offset, sps_size};
       if ((nal[0] & 0x1f) == 7) {
         nal = nal.subspan(1);
       }
@@ -735,6 +741,7 @@ std::optional<CodecInfo> ParseAvcC(std::span<const std::uint8_t> data,
       offset += 2;
       if (CanRead(data, offset, pps_size)) {
         codec.pps_hex = BytesToHex(ByteSpan(data, offset, pps_size));
+        codec.pps_bytes = ByteRange{offset, pps_size};
       }
     }
   }
@@ -831,11 +838,240 @@ std::string ParseHdlr(std::span<const std::uint8_t> data, const StructureNode& h
   return handler;
 }
 
-void ParseStsz(std::span<const std::uint8_t> data, const StructureNode& stsz, TrackInfo& track) {
-  const auto payload = stsz.offset + stsz.header_size;
-  if (CanRead(data, payload + 8, 4)) {
-    track.sample_count = ReadBe32(data, payload + 8);
+struct StscEntry {
+  std::uint32_t first_chunk = 0;
+  std::uint32_t samples_per_chunk = 0;
+  std::uint32_t sample_description_index = 0;
+};
+
+std::vector<std::uint32_t> ParseSttsDurations(std::span<const std::uint8_t> data,
+                                              const StructureNode* stts,
+                                              std::uint32_t sample_count) {
+  std::vector<std::uint32_t> durations(sample_count, 0);
+  if (!stts || sample_count == 0) {
+    return durations;
   }
+
+  const auto payload = stts->offset + stts->header_size;
+  if (!CanRead(data, payload + 4, 4)) {
+    return durations;
+  }
+  const auto entry_count = ReadBe32(data, payload + 4);
+  std::uint64_t offset = payload + 8;
+  std::uint32_t sample_index = 0;
+  for (std::uint32_t i = 0; i < entry_count && CanRead(data, offset, 8) && sample_index < sample_count; ++i) {
+    const auto count = ReadBe32(data, offset);
+    const auto duration = ReadBe32(data, offset + 4);
+    offset += 8;
+    for (std::uint32_t j = 0; j < count && sample_index < sample_count; ++j) {
+      durations[sample_index++] = duration;
+    }
+  }
+  return durations;
+}
+
+std::vector<std::int64_t> ParseCttsOffsets(std::span<const std::uint8_t> data,
+                                           const StructureNode* ctts,
+                                           std::uint32_t sample_count) {
+  std::vector<std::int64_t> offsets(sample_count, 0);
+  if (!ctts || sample_count == 0) {
+    return offsets;
+  }
+
+  const auto payload = ctts->offset + ctts->header_size;
+  if (!CanRead(data, payload, 8)) {
+    return offsets;
+  }
+  const auto version = ReadU8(data, payload);
+  const auto entry_count = ReadBe32(data, payload + 4);
+  std::uint64_t offset = payload + 8;
+  std::uint32_t sample_index = 0;
+  for (std::uint32_t i = 0; i < entry_count && CanRead(data, offset, 8) && sample_index < sample_count; ++i) {
+    const auto count = ReadBe32(data, offset);
+    const auto raw = ReadBe32(data, offset + 4);
+    const auto composition_offset = version == 1
+        ? static_cast<std::int64_t>(static_cast<std::int32_t>(raw))
+        : static_cast<std::int64_t>(raw);
+    offset += 8;
+    for (std::uint32_t j = 0; j < count && sample_index < sample_count; ++j) {
+      offsets[sample_index++] = composition_offset;
+    }
+  }
+  return offsets;
+}
+
+std::vector<std::uint32_t> ParseStszSizes(std::span<const std::uint8_t> data,
+                                          const StructureNode* stsz,
+                                          std::uint32_t& sample_count) {
+  std::vector<std::uint32_t> sizes;
+  if (!stsz) {
+    return sizes;
+  }
+
+  const auto payload = stsz->offset + stsz->header_size;
+  if (!CanRead(data, payload, 12)) {
+    return sizes;
+  }
+
+  const auto default_size = ReadBe32(data, payload + 4);
+  sample_count = ReadBe32(data, payload + 8);
+  sizes.resize(sample_count, default_size);
+  if (default_size != 0) {
+    return sizes;
+  }
+
+  std::uint64_t offset = payload + 12;
+  for (std::uint32_t i = 0; i < sample_count && CanRead(data, offset, 4); ++i) {
+    sizes[i] = ReadBe32(data, offset);
+    offset += 4;
+  }
+  return sizes;
+}
+
+std::vector<std::uint64_t> ParseChunkOffsets(std::span<const std::uint8_t> data,
+                                             const StructureNode* stco,
+                                             const StructureNode* co64) {
+  std::vector<std::uint64_t> offsets;
+  const StructureNode* box = co64 ? co64 : stco;
+  if (!box) {
+    return offsets;
+  }
+
+  const auto payload = box->offset + box->header_size;
+  if (!CanRead(data, payload + 4, 4)) {
+    return offsets;
+  }
+  const auto entry_count = ReadBe32(data, payload + 4);
+  offsets.reserve(entry_count);
+  std::uint64_t offset = payload + 8;
+  for (std::uint32_t i = 0; i < entry_count; ++i) {
+    if (box->type == "co64") {
+      if (!CanRead(data, offset, 8)) {
+        break;
+      }
+      offsets.push_back(ReadBe64(data, offset));
+      offset += 8;
+    } else {
+      if (!CanRead(data, offset, 4)) {
+        break;
+      }
+      offsets.push_back(ReadBe32(data, offset));
+      offset += 4;
+    }
+  }
+  return offsets;
+}
+
+std::vector<StscEntry> ParseStsc(std::span<const std::uint8_t> data,
+                                 const StructureNode* stsc) {
+  std::vector<StscEntry> entries;
+  if (!stsc) {
+    return entries;
+  }
+
+  const auto payload = stsc->offset + stsc->header_size;
+  if (!CanRead(data, payload + 4, 4)) {
+    return entries;
+  }
+  const auto entry_count = ReadBe32(data, payload + 4);
+  entries.reserve(entry_count);
+  std::uint64_t offset = payload + 8;
+  for (std::uint32_t i = 0; i < entry_count && CanRead(data, offset, 12); ++i) {
+    entries.push_back({
+        .first_chunk = ReadBe32(data, offset),
+        .samples_per_chunk = ReadBe32(data, offset + 4),
+        .sample_description_index = ReadBe32(data, offset + 8),
+    });
+    offset += 12;
+  }
+  return entries;
+}
+
+std::vector<std::uint32_t> ParseStss(std::span<const std::uint8_t> data,
+                                     const StructureNode* stss) {
+  std::vector<std::uint32_t> sync_samples;
+  if (!stss) {
+    return sync_samples;
+  }
+
+  const auto payload = stss->offset + stss->header_size;
+  if (!CanRead(data, payload + 4, 4)) {
+    return sync_samples;
+  }
+  const auto entry_count = ReadBe32(data, payload + 4);
+  sync_samples.reserve(entry_count);
+  std::uint64_t offset = payload + 8;
+  for (std::uint32_t i = 0; i < entry_count && CanRead(data, offset, 4); ++i) {
+    sync_samples.push_back(ReadBe32(data, offset));
+    offset += 4;
+  }
+  std::sort(sync_samples.begin(), sync_samples.end());
+  return sync_samples;
+}
+
+void ParseSampleTable(std::span<const std::uint8_t> data, const StructureNode& stbl,
+                      TrackInfo& track, IsoBmffAnalysis& analysis) {
+  std::uint32_t sample_count = track.sample_count;
+  const auto sizes = ParseStszSizes(data, FindChild(stbl, "stsz"), sample_count);
+  track.sample_count = sample_count;
+  track.sample_table_total = sample_count;
+  if (sample_count == 0 || sizes.empty()) {
+    return;
+  }
+
+  const auto chunk_offsets = ParseChunkOffsets(data, FindChild(stbl, "stco"), FindChild(stbl, "co64"));
+  const auto stsc_entries = ParseStsc(data, FindChild(stbl, "stsc"));
+  const auto durations = ParseSttsDurations(data, FindChild(stbl, "stts"), sample_count);
+  const auto composition_offsets = ParseCttsOffsets(data, FindChild(stbl, "ctts"), sample_count);
+  const auto sync_samples = ParseStss(data, FindChild(stbl, "stss"));
+  if (chunk_offsets.empty() || stsc_entries.empty()) {
+    analysis.warnings.push_back("sample table missing chunk offsets or stsc mapping");
+  }
+
+  std::vector<std::uint64_t> sample_offsets(sample_count, 0);
+  std::uint32_t sample_index = 0;
+  std::size_t stsc_index = 0;
+  for (std::size_t chunk_index = 0; chunk_index < chunk_offsets.size() && sample_index < sample_count; ++chunk_index) {
+    const auto one_based_chunk = static_cast<std::uint32_t>(chunk_index + 1);
+    while (stsc_index + 1 < stsc_entries.size() &&
+           stsc_entries[stsc_index + 1].first_chunk <= one_based_chunk) {
+      ++stsc_index;
+    }
+    const auto samples_per_chunk = stsc_entries.empty() ? 0 : stsc_entries[stsc_index].samples_per_chunk;
+    std::uint64_t offset = chunk_offsets[chunk_index];
+    for (std::uint32_t i = 0; i < samples_per_chunk && sample_index < sample_count; ++i) {
+      sample_offsets[sample_index] = offset;
+      offset += sizes[sample_index];
+      ++sample_index;
+    }
+  }
+
+  std::uint64_t dts = 0;
+  const auto output_count = std::min<std::uint32_t>(sample_count, kSampleOutputLimit);
+  track.samples.reserve(output_count);
+  for (std::uint32_t i = 0; i < sample_count; ++i) {
+    const auto duration = i < durations.size() ? durations[i] : 0;
+    const auto composition_offset = i < composition_offsets.size() ? composition_offsets[i] : 0;
+    if (i < output_count) {
+      const bool sync = sync_samples.empty() ||
+          std::binary_search(sync_samples.begin(), sync_samples.end(), i + 1);
+      SampleInfo sample;
+      sample.index = i + 1;
+      sample.offset = sample_offsets[i];
+      sample.size = sizes[i];
+      sample.dts = dts;
+      sample.pts = static_cast<std::int64_t>(dts) + composition_offset;
+      sample.duration = duration;
+      sample.composition_offset = composition_offset;
+      sample.sync = sync;
+      if (sample.offset != 0 && sample.size != 0) {
+        sample.bytes = ByteRange{sample.offset, sample.size};
+      }
+      track.samples.push_back(sample);
+    }
+    dts += duration;
+  }
+  track.sample_table_truncated = sample_count > output_count;
 }
 
 void ParseStsd(std::span<const std::uint8_t> data, const StructureNode& stsd, TrackInfo& track) {
@@ -924,9 +1160,7 @@ void ParseTrack(std::span<const std::uint8_t> data, const StructureNode& trak,
       if (const auto* stsd = FindChild(*stbl, "stsd")) {
         ParseStsd(data, *stsd, track);
       }
-      if (const auto* stsz = FindChild(*stbl, "stsz")) {
-        ParseStsz(data, *stsz, track);
-      }
+      ParseSampleTable(data, *stbl, track, analysis);
     }
   }
 
@@ -1034,6 +1268,49 @@ void WriteCodecJson(std::ostringstream& out, const CodecInfo& codec, int indent)
     out << ",\n" << Indent(indent + 2) << "\"asc_hex\": \""
         << JsonEscape(codec.asc_hex) << "\"";
   }
+  if (codec.vps_bytes) {
+    out << ",\n" << Indent(indent + 2) << "\"vps_bytes\": {\n";
+    out << Indent(indent + 4) << "\"offset\": " << codec.vps_bytes->offset << ",\n";
+    out << Indent(indent + 4) << "\"length\": " << codec.vps_bytes->length << "\n";
+    out << Indent(indent + 2) << "}";
+  }
+  if (codec.sps_bytes) {
+    out << ",\n" << Indent(indent + 2) << "\"sps_bytes\": {\n";
+    out << Indent(indent + 4) << "\"offset\": " << codec.sps_bytes->offset << ",\n";
+    out << Indent(indent + 4) << "\"length\": " << codec.sps_bytes->length << "\n";
+    out << Indent(indent + 2) << "}";
+  }
+  if (codec.pps_bytes) {
+    out << ",\n" << Indent(indent + 2) << "\"pps_bytes\": {\n";
+    out << Indent(indent + 4) << "\"offset\": " << codec.pps_bytes->offset << ",\n";
+    out << Indent(indent + 4) << "\"length\": " << codec.pps_bytes->length << "\n";
+    out << Indent(indent + 2) << "}";
+  }
+  if (codec.asc_bytes) {
+    out << ",\n" << Indent(indent + 2) << "\"asc_bytes\": {\n";
+    out << Indent(indent + 4) << "\"offset\": " << codec.asc_bytes->offset << ",\n";
+    out << Indent(indent + 4) << "\"length\": " << codec.asc_bytes->length << "\n";
+    out << Indent(indent + 2) << "}";
+  }
+  out << "\n" << Indent(indent) << "}";
+}
+
+void WriteSampleJson(std::ostringstream& out, const SampleInfo& sample, int indent) {
+  out << "{\n";
+  out << Indent(indent + 2) << "\"index\": " << sample.index << ",\n";
+  out << Indent(indent + 2) << "\"offset\": " << sample.offset << ",\n";
+  out << Indent(indent + 2) << "\"size\": " << sample.size << ",\n";
+  out << Indent(indent + 2) << "\"dts\": " << sample.dts << ",\n";
+  out << Indent(indent + 2) << "\"pts\": " << sample.pts << ",\n";
+  out << Indent(indent + 2) << "\"duration\": " << sample.duration << ",\n";
+  out << Indent(indent + 2) << "\"composition_offset\": " << sample.composition_offset << ",\n";
+  out << Indent(indent + 2) << "\"sync\": " << (sample.sync ? "true" : "false");
+  if (sample.bytes) {
+    out << ",\n" << Indent(indent + 2) << "\"bytes\": {\n";
+    out << Indent(indent + 4) << "\"offset\": " << sample.bytes->offset << ",\n";
+    out << Indent(indent + 4) << "\"length\": " << sample.bytes->length << "\n";
+    out << Indent(indent + 2) << "}";
+  }
   out << "\n" << Indent(indent) << "}";
 }
 
@@ -1059,6 +1336,20 @@ void WriteTrackJson(std::ostringstream& out, const TrackInfo& track, int indent)
   out << Indent(indent + 2) << "\"sample_count\": " << track.sample_count << ",\n";
   out << Indent(indent + 2) << "\"sample_description_count\": "
       << track.sample_description_count << ",\n";
+  out << Indent(indent + 2) << "\"sample_table_total\": "
+      << track.sample_table_total << ",\n";
+  out << Indent(indent + 2) << "\"sample_table_truncated\": "
+      << (track.sample_table_truncated ? "true" : "false") << ",\n";
+  out << Indent(indent + 2) << "\"samples\": [\n";
+  for (std::size_t i = 0; i < track.samples.size(); ++i) {
+    out << Indent(indent + 4);
+    WriteSampleJson(out, track.samples[i], indent + 4);
+    if (i + 1 != track.samples.size()) {
+      out << ",";
+    }
+    out << "\n";
+  }
+  out << Indent(indent + 2) << "],\n";
   out << Indent(indent + 2) << "\"codec\": ";
   WriteCodecJson(out, track.codec, indent + 2);
   out << "\n" << Indent(indent) << "}";

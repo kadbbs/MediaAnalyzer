@@ -31,11 +31,13 @@ const urlForm = document.querySelector("#urlForm");
 const fileInput = document.querySelector("#fileInput");
 const urlInput = document.querySelector("#urlInput");
 const languageSelect = document.querySelector("#languageSelect");
+const modeSelect = document.querySelector("#modeSelect");
 
 const dictionaries = {
   "zh-CN": {
     "app.subtitle": "容器 / 时间线 / 编码头 / 字节检查器",
     "label.language": "语言",
+    "label.mode": "模式",
     "label.file": "文件",
     "action.analyze": "分析",
     "action.fetch": "拉取",
@@ -74,6 +76,7 @@ const dictionaries = {
     "panel.selectedBytes": "选中字节",
     "panel.reference": "参考",
     "panel.codecBytes": "编码字节",
+    "panel.sampleTable": "Sample 表",
     "hint.selectNode": "选择节点以检查字节",
     "hint.mappedRanges": "映射范围",
     "field.name": "名称",
@@ -121,6 +124,10 @@ const dictionaries = {
     "field.range": "范围",
     "field.mappedRange": "映射范围",
     "field.info": "信息",
+    "field.index": "序号",
+    "field.dts": "DTS",
+    "field.pts": "PTS",
+    "field.sync": "关键帧",
     "value.yes": "是",
     "value.no": "否",
     "value.noBoxSelected": "未选择 box",
@@ -143,16 +150,31 @@ const dictionaries = {
     "label.offset": "offset",
     "label.codecHeader": "Codec Header",
     "label.audioSpecificConfig": "AudioSpecificConfig",
+    "mode.learning": "学习",
+    "mode.expert": "专家",
+    "label.packet": "包",
+    "label.frame": "帧",
+    "label.element": "元素",
+    "label.nalUnit": "NAL 单元",
     "outline.containerTree": "容器 / Box 树",
     "outline.tracksCodecHeaders": "轨道 / 编码头",
+    "outline.packetsFrames": "包 / 帧 / 元素",
     "diagnostic.lowConfidence": "检测置信度较低：{confidence}",
     "diagnostic.isoNoStructure": "检测到 ISO-BMFF，但容器解析器没有返回结构",
     "diagnostic.noTracksFound": "容器已解析，但没有发现轨道",
     "diagnostic.noCodecDescription": "轨道 #{id} 还没有解析出 codec 描述",
     "diagnostic.noVideoSize": "视频轨 #{id} 还没有解析出宽高",
+    "diagnostic.moovAfterMdat": "moov 位于 mdat 之后，渐进播放/首屏可能变慢",
+    "diagnostic.sampleOutOfRange": "轨道 #{id} 的 sample #{sample} 字节范围超出已分析输入",
+    "diagnostic.sampleTableTruncated": "轨道 #{id} 的 sample 表只显示前 {shown}/{total} 条",
     "diagnostic.ok": "基础诊断未发现问题",
     "selection.noneExplanation": "选择左侧容器节点后，这里会显示解析说明和对应字节。",
     "selection.bytesExplanation": "这里显示右侧结构索引选中的局部字节；左侧始终保留整体输入二进制，方便按 offset 对照。",
+    "selection.sampleExplanation": "这个 sample 位于媒体数据 payload 中；左侧会高亮它在文件里的真实字节范围。",
+    "selection.tsPacketExplanation": "这是 MPEG-TS packet 的真实字节范围。",
+    "selection.ebmlElementExplanation": "这是 EBML element 的真实字节范围。",
+    "selection.frameExplanation": "这是 elementary stream frame 的真实字节范围。",
+    "selection.nalExplanation": "这是 Annex B NAL unit 的真实字节范围。",
     "insight.format": "<strong>{format}</strong> 是识别出的封装/格式入口；封装负责组织轨道、时间线、索引和 metadata。",
     "insight.isoBmff": "这是 ISO-BMFF 家族文件。MP4、MOV、CMAF/fMP4 都属于这个体系，核心结构由一系列 box 组成。",
     "insight.majorBrand": "<strong>{brand}</strong> 是 major brand，用来提示播放器按哪类 MP4 兼容规则理解文件。",
@@ -181,6 +203,7 @@ const dictionaries = {
   "en-US": {
     "app.subtitle": "Container / Timeline / Codec Header / Bytes Inspector",
     "label.language": "Language",
+    "label.mode": "Mode",
     "label.file": "File",
     "action.analyze": "Analyze",
     "action.fetch": "Fetch",
@@ -219,6 +242,7 @@ const dictionaries = {
     "panel.selectedBytes": "Selected Bytes",
     "panel.reference": "Reference",
     "panel.codecBytes": "Codec Bytes",
+    "panel.sampleTable": "Sample Table",
     "hint.selectNode": "select a node to inspect bytes",
     "hint.mappedRanges": "mapped ranges",
     "field.name": "Name",
@@ -266,6 +290,10 @@ const dictionaries = {
     "field.range": "Range",
     "field.mappedRange": "Mapped Range",
     "field.info": "Info",
+    "field.index": "Index",
+    "field.dts": "DTS",
+    "field.pts": "PTS",
+    "field.sync": "Sync",
     "value.yes": "yes",
     "value.no": "no",
     "value.noBoxSelected": "No box selected",
@@ -288,16 +316,31 @@ const dictionaries = {
     "label.offset": "offset",
     "label.codecHeader": "Codec Header",
     "label.audioSpecificConfig": "AudioSpecificConfig",
+    "mode.learning": "Learning",
+    "mode.expert": "Expert",
+    "label.packet": "packet",
+    "label.frame": "frame",
+    "label.element": "element",
+    "label.nalUnit": "NAL unit",
     "outline.containerTree": "Container / Box Tree",
     "outline.tracksCodecHeaders": "Tracks / Codec Headers",
+    "outline.packetsFrames": "Packets / Frames / Elements",
     "diagnostic.lowConfidence": "low detection confidence: {confidence}",
     "diagnostic.isoNoStructure": "ISO-BMFF detected but container parser did not return a structure",
     "diagnostic.noTracksFound": "container parsed but no tracks were found",
     "diagnostic.noCodecDescription": "track #{id} has no parsed codec description",
     "diagnostic.noVideoSize": "video track #{id} has no parsed width/height yet",
+    "diagnostic.moovAfterMdat": "moov is after mdat, which may slow progressive playback startup",
+    "diagnostic.sampleOutOfRange": "track #{id} sample #{sample} byte range exceeds analyzed input",
+    "diagnostic.sampleTableTruncated": "track #{id} sample table shows the first {shown}/{total} entries",
     "diagnostic.ok": "no basic diagnostics triggered",
     "selection.noneExplanation": "Select a container node to inspect its parsed meaning and mapped bytes.",
     "selection.bytesExplanation": "This panel shows the local bytes selected from the structure index. The full input binary remains on the left for offset-level comparison.",
+    "selection.sampleExplanation": "This sample lives in the media data payload. The left panel highlights its real byte range in the file.",
+    "selection.tsPacketExplanation": "This is the real byte range of an MPEG-TS packet.",
+    "selection.ebmlElementExplanation": "This is the real byte range of an EBML element.",
+    "selection.frameExplanation": "This is the real byte range of an elementary stream frame.",
+    "selection.nalExplanation": "This is the real byte range of an Annex B NAL unit.",
     "insight.format": "<strong>{format}</strong> is the detected container or format entry point. The container organizes tracks, timelines, indexes, and metadata.",
     "insight.isoBmff": "This is an ISO-BMFF family file. MP4, MOV, CMAF, and fMP4 belong to this family, and the core structure is a sequence of boxes.",
     "insight.majorBrand": "<strong>{brand}</strong> is the major brand, which hints which MP4 compatibility rules a player should apply.",
@@ -427,14 +470,20 @@ let locale = localStorage.getItem("mediaAnalyzer.locale") || "zh-CN";
 if (!dictionaries[locale]) {
   locale = "zh-CN";
 }
+let displayMode = localStorage.getItem("mediaAnalyzer.mode") || "learning";
+if (!["learning", "expert"].includes(displayMode)) {
+  displayMode = "learning";
+}
 let currentPayload = null;
 let currentStatus = { key: "status.ready", params: {}, raw: null, isError: false };
 let activeByteRange = null;
+let mappedRanges = [];
 let mainHexView = null;
 let mainHexRenderFrame = 0;
 const HEX_BYTES_PER_LINE = 16;
 const HEX_ROW_HEIGHT = 21;
 const HEX_OVERSCAN_LINES = 24;
+const BYTE_INSPECT_LIMIT = 4096;
 
 function t(key, params = {}) {
   const source = dictionaries[locale] || dictionaries["zh-CN"];
@@ -452,6 +501,11 @@ function applyStaticTranslations() {
   if (languageSelect) {
     languageSelect.value = locale;
   }
+  if (modeSelect) {
+    modeSelect.value = displayMode;
+    modeSelect.querySelector('option[value="learning"]').textContent = t("mode.learning");
+    modeSelect.querySelector('option[value="expert"]').textContent = t("mode.expert");
+  }
   document.querySelectorAll("[data-i18n]").forEach((element) => {
     element.textContent = t(element.dataset.i18n);
   });
@@ -464,6 +518,10 @@ function applyStaticTranslations() {
   renderStatus();
 }
 
+function applyDisplayMode() {
+  document.body.dataset.mode = displayMode;
+}
+
 languageSelect?.addEventListener("change", () => {
   locale = languageSelect.value;
   localStorage.setItem("mediaAnalyzer.locale", locale);
@@ -471,6 +529,12 @@ languageSelect?.addEventListener("change", () => {
   if (currentPayload) {
     render(currentPayload);
   }
+});
+
+modeSelect?.addEventListener("change", () => {
+  displayMode = modeSelect.value;
+  localStorage.setItem("mediaAnalyzer.mode", displayMode);
+  applyDisplayMode();
 });
 
 document.querySelectorAll(".tab").forEach((tab) => {
@@ -490,6 +554,7 @@ function activateView(view) {
 }
 
 applyStaticTranslations();
+applyDisplayMode();
 activateView("bytes");
 
 uploadForm.addEventListener("submit", async (event) => {
@@ -547,6 +612,7 @@ function render(payload) {
   const detection = payload.detection || {};
   const container = payload.container || {};
   const tracks = Array.isArray(container.tracks) ? container.tracks : [];
+  mappedRanges = buildMappedRanges(payload);
 
   formatEl.textContent = detection.format || "-";
   containerFormatEl.textContent = container.format || detection.family || "-";
@@ -568,6 +634,135 @@ function render(payload) {
   renderByteSources(payload);
   renderParsedOutline(payload);
   jsonOutput.textContent = JSON.stringify(payload, null, 2);
+}
+
+function buildMappedRanges(payload) {
+  const ranges = [];
+  const container = payload.container || {};
+  const tracks = Array.isArray(container.tracks) ? container.tracks : [];
+
+  flattenBoxes(container.structure || []).forEach((node) => {
+    const range = boxRange(node);
+    if (range) {
+      ranges.push({
+        priority: node.type === "mdat" ? 60 : 30,
+        range,
+        select: () => renderSelectedBox(node),
+      });
+    }
+  });
+
+  tracks.forEach((track) => {
+    const codec = track.codec || {};
+    const codecRange = codecHeaderRange(codec);
+    if (codecRange) {
+      ranges.push({
+        priority: 10,
+        range: codecRange,
+        select: () => renderSelectedBytes(t("label.codecHeader"), { offset: 0, hex: codec.raw_header_hex || "" }, [[t("field.info"), codecLabel(codec)]], "", codecRange),
+      });
+    }
+    [
+      ["VPS", codec.vps_hex, codec.vps_bytes],
+      ["SPS", codec.sps_hex, codec.sps_bytes],
+      ["PPS", codec.pps_hex, codec.pps_bytes],
+      [t("label.audioSpecificConfig"), codec.asc_hex, codec.asc_bytes],
+    ].forEach(([label, hex, rangeInfo]) => {
+      const range = byteRange(rangeInfo);
+      if (hex && range) {
+        ranges.push({
+          priority: 3,
+          range,
+          select: () => renderSelectedBytes(label, { offset: 0, hex }, [[t("field.info"), codecLabel(codec)]], "", range),
+        });
+      }
+    });
+    (track.samples || []).forEach((sample) => {
+      const range = sampleRange(sample);
+      if (range) {
+        ranges.push({
+          priority: 5,
+          range,
+          select: () => renderSelectedSample(sample),
+        });
+      }
+    });
+  });
+
+  genericAnalysisRanges(payload).forEach((item) => {
+    ranges.push({
+      priority: 8,
+      range: item.range,
+      select: () => renderSelectedMappedRange(item.title, item.range, item.rows, item.explanation),
+    });
+  });
+
+  return ranges.sort((left, right) => {
+    if (left.priority !== right.priority) {
+      return left.priority - right.priority;
+    }
+    return left.range.length - right.range.length;
+  });
+}
+
+function genericAnalysisRanges(payload) {
+  const out = [];
+  const container = payload.container || {};
+  const bitstream = payload.bitstream || {};
+
+  (container.packets || []).forEach((packet) => {
+    const range = normalizedRange(packet.offset, packet.length);
+    if (range) {
+      out.push({
+        title: `${t("label.packet")} #${valueOrDash(packet.index)}`,
+        meta: `PID ${valueOrDash(packet.pid)} · @${valueOrDash(packet.offset)}`,
+        range,
+        rows: [["PID", packet.pid], ["CC", packet.continuity_counter]],
+        explanation: t("selection.tsPacketExplanation"),
+      });
+    }
+  });
+
+  (container.elements || []).forEach((element) => {
+    const range = normalizedRange(element.offset, Number(element.header_size || 0) + Number(element.size || 0));
+    if (range) {
+      out.push({
+        title: `${t("label.element")} #${valueOrDash(element.index)}`,
+        meta: `ID ${valueOrDash(element.id_value)} · @${valueOrDash(element.offset)}`,
+        range,
+        rows: [["ID", element.id_value], [t("field.size"), element.size]],
+        explanation: t("selection.ebmlElementExplanation"),
+      });
+    }
+  });
+
+  (bitstream.frames || []).forEach((frame) => {
+    const range = normalizedRange(frame.offset, frame.length);
+    if (range) {
+      out.push({
+        title: `${t("label.frame")} #${valueOrDash(frame.index)}`,
+        meta: `${valueOrDash(frame.sample_rate)} Hz · @${valueOrDash(frame.offset)}`,
+        range,
+        rows: [[t("field.sampleRate"), frame.sample_rate], [t("field.channels"), frame.channel_config]],
+        explanation: t("selection.frameExplanation"),
+      });
+    }
+  });
+
+  (bitstream.nal_units || []).forEach((nal) => {
+    const range = normalizedRange(nal.offset, nal.length);
+    if (range) {
+      out.push({
+        title: `${t("label.nalUnit")} #${valueOrDash(nal.index)}`,
+        meta: `type ${valueOrDash(nal.nal_type)} · @${valueOrDash(nal.offset)}`,
+        range,
+        rows: [["NAL type", nal.nal_type], ["Start code", nal.start_code_length]],
+        explanation: t("selection.nalExplanation"),
+      });
+    }
+  });
+
+  return out;
 }
 
 function renderInput(input) {
@@ -609,6 +804,12 @@ function renderDiagnostics(payload, tracks) {
   if (container.format && !tracks.length) {
     diagnostics.push(["warn", t("diagnostic.noTracksFound")]);
   }
+  const topBoxes = Array.isArray(container.structure) ? container.structure : [];
+  const moov = topBoxes.find((node) => node.type === "moov");
+  const mdat = topBoxes.find((node) => node.type === "mdat");
+  if (moov && mdat && moov.offset > mdat.offset) {
+    diagnostics.push(["warn", t("diagnostic.moovAfterMdat")]);
+  }
   tracks.forEach((track) => {
     if (!track.codec || !track.codec.description) {
       diagnostics.push(["warn", t("diagnostic.noCodecDescription", { id: valueOrDash(track.id) })]);
@@ -616,6 +817,22 @@ function renderDiagnostics(payload, tracks) {
     if (track.type === "video" && !(track.width || (track.codec && track.codec.width))) {
       diagnostics.push(["info", t("diagnostic.noVideoSize", { id: valueOrDash(track.id) })]);
     }
+    if (track.sample_table_truncated) {
+      diagnostics.push(["info", t("diagnostic.sampleTableTruncated", {
+        id: valueOrDash(track.id),
+        shown: Array.isArray(track.samples) ? track.samples.length : 0,
+        total: valueOrDash(track.sample_table_total),
+      })]);
+    }
+    (track.samples || []).slice(0, 100).forEach((sample) => {
+      const end = Number(sample.offset || 0) + Number(sample.size || 0);
+      if (payload.input && typeof payload.input.size === "number" && end > payload.input.size) {
+        diagnostics.push(["error", t("diagnostic.sampleOutOfRange", {
+          id: valueOrDash(track.id),
+          sample: valueOrDash(sample.index),
+        })]);
+      }
+    });
   });
 
   if (!diagnostics.length) {
@@ -846,12 +1063,91 @@ function trackPanel(track, maxDuration, index) {
   });
 
   const codecBytes = codecBytePanel(codecInfo);
+  const samples = sampleTablePanel(track);
 
   panel.append(head, timeline, fields, explanations);
   if (codecBytes) {
     panel.append(codecBytes);
   }
+  if (samples) {
+    panel.append(samples);
+  }
   return panel;
+}
+
+function sampleTablePanel(track) {
+  const samples = Array.isArray(track.samples) ? track.samples : [];
+  if (!samples.length) {
+    return null;
+  }
+
+  const panel = document.createElement("div");
+  panel.className = "sample-panel";
+  const title = document.createElement("h2");
+  title.textContent = `${t("panel.sampleTable")} (${samples.length}${track.sample_table_truncated ? ` / ${valueOrDash(track.sample_table_total)}` : ""})`;
+  const map = sampleTimeline(samples);
+  const wrap = document.createElement("div");
+  wrap.className = "table-wrap compact-table";
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  const headerRow = document.createElement("tr");
+  [t("field.index"), t("field.offset"), t("field.size"), t("field.dts"), t("field.pts"), t("field.duration"), t("field.sync")].forEach((label) => {
+    const th = document.createElement("th");
+    th.textContent = label;
+    headerRow.append(th);
+  });
+  thead.append(headerRow);
+
+  const tbody = document.createElement("tbody");
+  samples.forEach((sample) => {
+    const row = document.createElement("tr");
+    row.tabIndex = 0;
+    row.className = "sample-row";
+    [sample.index, sample.offset, sample.size, sample.dts, sample.pts, sample.duration, sample.sync ? t("value.yes") : t("value.no")].forEach((value) => {
+      const td = document.createElement("td");
+      td.textContent = valueOrDash(value);
+      row.append(td);
+    });
+    const select = () => {
+      renderSelectedSample(sample);
+      activateView("bytes");
+    };
+    row.addEventListener("click", select);
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        select();
+      }
+    });
+    tbody.append(row);
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+  panel.append(title, map, wrap);
+  return panel;
+}
+
+function sampleTimeline(samples) {
+  const map = document.createElement("div");
+  map.className = "sample-timeline";
+  const visible = samples.slice(0, 200);
+  const endTime = Math.max(...visible.map((sample) => Number(sample.dts || 0) + Number(sample.duration || 0)), 1);
+  visible.forEach((sample) => {
+    const marker = document.createElement("button");
+    marker.type = "button";
+    marker.className = `sample-marker${sample.sync ? " sync" : ""}`;
+    const left = (Number(sample.dts || 0) / endTime) * 100;
+    const width = Math.max(.4, (Number(sample.duration || 0) / endTime) * 100);
+    marker.style.left = `${Math.min(99.6, Math.max(0, left))}%`;
+    marker.style.width = `${Math.min(100, width)}%`;
+    marker.title = `Sample #${valueOrDash(sample.index)} @ ${valueOrDash(sample.offset)}`;
+    marker.addEventListener("click", () => {
+      renderSelectedSample(sample);
+      activateView("bytes");
+    });
+    map.append(marker);
+  });
+  return map;
 }
 
 function codecBytePanel(codecInfo) {
@@ -1022,6 +1318,70 @@ function renderSelectedBytes(title, bytes, rows = [], explanation = "", mapRange
   selectMappedRange(mapRange);
 }
 
+function renderSelectedMappedRange(title, range, rows = [], explanation = "") {
+  renderSelectedBytes(title, { offset: range?.offset, length: range?.length, hex: "" }, rows, explanation, range);
+  fetchByteRange(range).then((byteInfo) => {
+    if (!byteInfo || !rangesEqual(activeByteRange, range)) {
+      return;
+    }
+    renderSelectedBytes(title, byteInfo, rows, explanation, range);
+  }).catch(() => {
+    // Keep the mapped highlight even if byte fetch fails; the analysis data is still useful.
+  });
+}
+
+function renderSelectedSample(sample) {
+  const range = sampleRange(sample);
+  renderSelectedMappedRange(
+    `Sample #${valueOrDash(sample.index)}`,
+    range,
+    [
+      [t("field.dts"), sample.dts],
+      [t("field.pts"), sample.pts],
+      [t("field.duration"), sample.duration],
+      [t("field.sync"), sample.sync ? t("value.yes") : t("value.no")],
+    ],
+    t("selection.sampleExplanation"),
+  );
+}
+
+async function fetchByteRange(range) {
+  const sessionId = currentPayload && currentPayload.session && currentPayload.session.id;
+  if (!sessionId || !range) {
+    return null;
+  }
+  const length = Math.max(1, Math.min(Number(range.length || 0), BYTE_INSPECT_LIMIT));
+  const params = new URLSearchParams({
+    id: sessionId,
+    offset: String(range.offset),
+    length: String(length),
+  });
+  const response = await fetch(`/api/bytes?${params.toString()}`);
+  if (!response.ok) {
+    return null;
+  }
+  return response.json();
+}
+
+function rangesEqual(left, right) {
+  if (!left || !right) {
+    return false;
+  }
+  return left.offset === right.offset && left.length === right.length;
+}
+
+function selectRangeAtOffset(offset) {
+  const numericOffset = Number(offset);
+  if (!Number.isFinite(numericOffset)) {
+    return;
+  }
+  const match = mappedRanges.find((item) =>
+    numericOffset >= item.range.offset && numericOffset < item.range.offset + item.range.length);
+  if (match) {
+    match.select();
+  }
+}
+
 function renderInlineSelection(rows, explanationHtml, bytes) {
   if (!bytesSelectionMeta || !bytesSelectionExplain || !bytesSelectedHexDump) {
     return;
@@ -1061,20 +1421,30 @@ function renderByteSources(payload) {
     const codec = track.codec || {};
     const codecRange = codecHeaderRange(codec);
     [
-      [t("label.codecHeader"), codec.raw_header_hex],
-      ["VPS", codec.vps_hex],
-      ["SPS", codec.sps_hex],
-      ["PPS", codec.pps_hex],
-      ["ASC", codec.asc_hex],
-    ].forEach(([label, hex]) => {
+      [t("label.codecHeader"), codec.raw_header_hex, codec.raw_header_bytes],
+      ["VPS", codec.vps_hex, codec.vps_bytes],
+      ["SPS", codec.sps_hex, codec.sps_bytes],
+      ["PPS", codec.pps_hex, codec.pps_bytes],
+      ["ASC", codec.asc_hex, codec.asc_bytes],
+    ].forEach(([label, hex, rangeInfo]) => {
       if (hex) {
         sources.push({
           label: `${t("label.track")} #${valueOrDash(track.id)} ${label}`,
           title: `${codecLabel(codec)} · ${label}`,
           bytes: { offset: 0, hex },
-          mapRange: codecRange,
+          mapRange: byteRange(rangeInfo) || codecRange,
         });
       }
+    });
+  });
+  genericAnalysisRanges(payload).forEach((item) => {
+    sources.push({
+      label: `${item.title} @ ${item.range.offset}`,
+      title: item.title,
+      bytes: { offset: item.range.offset, length: item.range.length, hex: "" },
+      mapRange: item.range,
+      rows: item.rows,
+      explanation: item.explanation,
     });
   });
 
@@ -1093,7 +1463,11 @@ function renderByteSources(payload) {
     button.addEventListener("click", () => {
       document.querySelectorAll(".byte-source.active").forEach((item) => item.classList.remove("active"));
       button.classList.add("active");
-      renderSelectedBytes(source.title, source.bytes, [[t("field.range"), source.label]], "", source.mapRange || null);
+      if ((!source.bytes || !source.bytes.hex) && source.mapRange) {
+        renderSelectedMappedRange(source.title, source.mapRange, source.rows || [[t("field.range"), source.label]], source.explanation || "");
+      } else {
+        renderSelectedBytes(source.title, source.bytes, [[t("field.range"), source.label]], source.explanation || "", source.mapRange || null);
+      }
     });
     if (index === 0) {
       button.classList.add("active");
@@ -1142,6 +1516,21 @@ function renderParsedOutline(payload) {
     details.append(body);
     items.push(details);
   }
+  const genericRanges = genericAnalysisRanges(payload).slice(0, 128);
+  if (genericRanges.length) {
+    const details = document.createElement("details");
+    details.open = true;
+    const summary = document.createElement("summary");
+    summary.textContent = t("outline.packetsFrames");
+    details.append(summary);
+    const body = document.createElement("div");
+    body.className = "outline-children";
+    genericRanges.forEach((item) => {
+      body.append(outlineLeaf(item.title, item.meta, { offset: item.range.offset, length: item.range.length, hex: "" }, item.range));
+    });
+    details.append(body);
+    items.push(details);
+  }
 
   parsedOutline.replaceChildren(...(items.length ? items : [emptyBlock(t("empty.noMappedStructures"))]));
 }
@@ -1177,14 +1566,34 @@ function outlineTrack(track) {
   const codec = track.codec || {};
   const codecRange = codecHeaderRange(codec);
   [
-    [t("label.codecHeader"), codec.raw_header_hex],
-    ["VPS", codec.vps_hex],
-    ["SPS", codec.sps_hex],
-    ["PPS", codec.pps_hex],
-    [t("label.audioSpecificConfig"), codec.asc_hex],
-  ].filter(([, hex]) => hex).forEach(([label, hex]) => {
-    body.append(outlineLeaf(label, codecLabel(codec), { offset: 0, hex }, codecRange));
+    [t("label.codecHeader"), codec.raw_header_hex, codec.raw_header_bytes],
+    ["VPS", codec.vps_hex, codec.vps_bytes],
+    ["SPS", codec.sps_hex, codec.sps_bytes],
+    ["PPS", codec.pps_hex, codec.pps_bytes],
+    [t("label.audioSpecificConfig"), codec.asc_hex, codec.asc_bytes],
+  ].filter(([, hex]) => hex).forEach(([label, hex, rangeInfo]) => {
+    body.append(outlineLeaf(label, codecLabel(codec), { offset: 0, hex }, byteRange(rangeInfo) || codecRange));
   });
+  const samples = Array.isArray(track.samples) ? track.samples.slice(0, 100) : [];
+  if (samples.length) {
+    const sampleDetails = document.createElement("details");
+    sampleDetails.open = false;
+    const sampleSummary = document.createElement("summary");
+    sampleSummary.textContent = `${t("panel.sampleTable")} (${samples.length})`;
+    sampleDetails.append(sampleSummary);
+    const sampleBody = document.createElement("div");
+    sampleBody.className = "outline-children";
+    samples.forEach((sample) => {
+      sampleBody.append(outlineLeaf(
+        `Sample #${valueOrDash(sample.index)}`,
+        `@${valueOrDash(sample.offset)} · ${valueOrDash(sample.size)} B`,
+        { offset: sample.offset, length: sample.size, hex: "" },
+        sampleRange(sample),
+      ));
+    });
+    sampleDetails.append(sampleBody);
+    body.append(sampleDetails);
+  }
   if (!body.children.length) {
     body.append(emptyBlock(t("empty.noCodecByteRanges")));
   }
@@ -1199,7 +1608,12 @@ function outlineLeaf(label, meta, bytes, mapRange = null) {
   button.innerHTML = `<strong>${escapeHtml(label)}</strong><span>${escapeHtml(meta || "")}</span>`;
   button.addEventListener("click", () => {
     markOutlineSelection(button);
-    renderSelectedBytes(label, bytes || {}, [[t("field.info"), meta || "-"]], "", mapRange);
+    const rows = [[t("field.info"), meta || "-"]];
+    if ((!bytes || !bytes.hex) && mapRange) {
+      renderSelectedMappedRange(label, mapRange, rows);
+    } else {
+      renderSelectedBytes(label, bytes || {}, rows, "", mapRange);
+    }
   });
   return button;
 }
@@ -1232,6 +1646,16 @@ function byteRange(bytes) {
     return null;
   }
   return normalizedRange(bytes.offset, bytes.length || hexByteLength(bytes.hex || ""));
+}
+
+function sampleRange(sample) {
+  if (!sample) {
+    return null;
+  }
+  if (sample.bytes) {
+    return normalizedRange(sample.bytes.offset, sample.bytes.length);
+  }
+  return normalizedRange(sample.offset, sample.size);
 }
 
 function normalizedRange(offset, length) {
@@ -1369,6 +1793,15 @@ function hexLineElement(slice, lineStart, asciiHint, asciiOffset) {
   if (lineIsMapped) {
     line.classList.add("mapped");
   }
+  line.addEventListener("click", (event) => {
+    if (!(event.target instanceof Element)) {
+      return;
+    }
+    const target = event.target.closest("[data-offset]");
+    if (target) {
+      selectRangeAtOffset(target.dataset.offset);
+    }
+  });
 
   const address = document.createElement("span");
   address.className = "hex-address";
