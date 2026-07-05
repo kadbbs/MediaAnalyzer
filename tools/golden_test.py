@@ -19,12 +19,15 @@ FIXTURES = {
     "sample.webm": b"\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01\x42\xf7\x81\x01",
     "sample.ts": b"\x47" + (b"\x00" * 187) + b"\x47" + (b"\x00" * 187) + b"\x47" + (b"\x00" * 187),
     "sample.wav": b"RIFF\x24\x00\x00\x00WAVEfmt ",
-    "sample.ogg": b"OggS\x00\x02",
-    "sample.flac": b"fLaC\x00\x00\x00\x22",
+    "sample.ogg": None,
+    "sample.flac": None,
     "sample.flv": b"FLV\x01\x05\x00\x00\x00\x09",
-    "sample.mp3": b"ID3\x04\x00\x00\x00\x00\x00\x00",
+    "sample.mp3": None,
     "sample.aac": b"\xff\xf1\x50\x80\x00\xff\xfc",
-    "sample.h264": b"\x00\x00\x00\x01\x67\x64\x00\x1f",
+    "sample.h264": None,
+    "sample.h265": None,
+    "sample.av1": None,
+    "sample.opushead": None,
     "playlist.m3u8": b"#EXTM3U\n#EXT-X-VERSION:3\n",
     "manifest.mpd": b'<?xml version="1.0"?><MPD xmlns="urn:mpeg:dash:schema:mpd:2011"></MPD>',
 }
@@ -43,7 +46,10 @@ EXPECTED = {
     "sample.flv": "flv",
     "sample.mp3": "mp3",
     "sample.aac": "adts-aac",
-    "sample.h264": "annex-b-bitstream",
+    "sample.h264": "h264-annex-b",
+    "sample.h265": "hevc-annex-b",
+    "sample.av1": "av1-obu",
+    "sample.opushead": "opus-head",
     "playlist.m3u8": "hls-m3u8",
     "manifest.mpd": "dash-mpd",
 }
@@ -55,6 +61,18 @@ def be16(value: int) -> bytes:
 
 def be32(value: int) -> bytes:
     return value.to_bytes(4, "big")
+
+
+def le16(value: int) -> bytes:
+    return value.to_bytes(2, "little")
+
+
+def le32(value: int) -> bytes:
+    return value.to_bytes(4, "little")
+
+
+def le64(value: int) -> bytes:
+    return value.to_bytes(8, "little")
 
 
 def box(kind: bytes, payload: bytes) -> bytes:
@@ -324,9 +342,111 @@ def make_audio_aac_mp4() -> bytes:
     return ftyp + box(b"moov", mvhd_box() + trak)
 
 
+class BitWriter:
+    def __init__(self) -> None:
+        self.bits: list[int] = []
+
+    def write(self, value: int, count: int) -> None:
+        for shift in range(count - 1, -1, -1):
+            self.bits.append((value >> shift) & 1)
+
+    def bytes(self) -> bytes:
+        out = bytearray()
+        for index in range(0, len(self.bits), 8):
+            byte = 0
+            for bit in self.bits[index:index + 8]:
+                byte = (byte << 1) | bit
+            byte <<= max(0, 8 - len(self.bits[index:index + 8]))
+            out.append(byte)
+        return bytes(out)
+
+
+def opus_head() -> bytes:
+    return b"OpusHead" + bytes([1, 2]) + le16(312) + le32(48000) + le16(0) + bytes([0])
+
+
+def make_ogg_opus() -> bytes:
+    payload = opus_head()
+    return (
+        b"OggS"
+        + bytes([0, 2])
+        + le64(0)
+        + le32(0x12345678)
+        + le32(0)
+        + le32(0)
+        + bytes([1, len(payload)])
+        + payload
+    )
+
+
+def make_flac_stream() -> bytes:
+    sample_rate = 44100
+    channels = 2
+    bits_per_sample = 16
+    total_samples = 44100
+    packed = (
+        (sample_rate << 44)
+        | ((channels - 1) << 41)
+        | ((bits_per_sample - 1) << 36)
+        | total_samples
+    ).to_bytes(8, "big")
+    streaminfo = (
+        be16(4096)
+        + be16(4096)
+        + b"\x00\x00\x10"
+        + b"\x00\x20\x00"
+        + packed
+        + (b"\x00" * 16)
+    )
+    return b"fLaC" + bytes([0x80]) + b"\x00\x00\x22" + streaminfo
+
+
+def make_mp3_stream() -> bytes:
+    frame_length = 417
+    frame = bytes.fromhex("ff fb 90 64") + (b"\x00" * (frame_length - 4))
+    return b"ID3\x04\x00\x00\x00\x00\x00\x00" + frame
+
+
+def make_h264_annex_b() -> bytes:
+    sps = bytes.fromhex("6764001facd940a02ff970110000030001000003003c8f162d96")
+    pps = bytes.fromhex("68ebe3cb22c0")
+    start = b"\x00\x00\x00\x01"
+    return start + sps + start + pps
+
+
+def make_hevc_annex_b() -> bytes:
+    vps = bytes.fromhex("40 01 0c 01 ff ff 01 60")
+    sps = bytes.fromhex("42 01 01 01 60 00 00 03 00 90")
+    pps = bytes.fromhex("44 01 c0 f1 83")
+    start = b"\x00\x00\x00\x01"
+    return start + vps + start + sps + start + pps
+
+
+def make_av1_obu() -> bytes:
+    bits = BitWriter()
+    bits.write(0, 3)    # seq_profile
+    bits.write(1, 1)    # still_picture
+    bits.write(1, 1)    # reduced_still_picture_header
+    bits.write(0, 5)    # seq_level_idx_0
+    bits.write(9, 4)    # frame_width_bits_minus_1 => 10 bits
+    bits.write(8, 4)    # frame_height_bits_minus_1 => 9 bits
+    bits.write(639, 10) # max_frame_width_minus_1
+    bits.write(359, 9)  # max_frame_height_minus_1
+    payload = bits.bytes()
+    assert len(payload) < 128
+    return bytes([0x0A, len(payload)]) + payload
+
+
 FIXTURES["video_avc1.mp4"] = make_video_avc1_mp4()
 FIXTURES["video_hvc1.mp4"] = make_video_hvc1_mp4()
 FIXTURES["audio_aac.mp4"] = make_audio_aac_mp4()
+FIXTURES["sample.ogg"] = make_ogg_opus()
+FIXTURES["sample.flac"] = make_flac_stream()
+FIXTURES["sample.mp3"] = make_mp3_stream()
+FIXTURES["sample.h264"] = make_h264_annex_b()
+FIXTURES["sample.h265"] = make_hevc_annex_b()
+FIXTURES["sample.av1"] = make_av1_obu()
+FIXTURES["sample.opushead"] = opus_head()
 
 
 def ensure_binary() -> None:
@@ -461,6 +581,46 @@ def main() -> int:
                     assert actual["container"]["elements"][0]["id_value"] == 0x1A45DFA3
                 except Exception as exc:
                     failures.append((name, "parsed EBML elements", f"error: {exc}", actual))
+            if name == "sample.ogg":
+                try:
+                    assert actual["container"]["format"] == "Ogg"
+                    assert actual["container"]["page_count"] == 1
+                    assert actual["container"]["pages"][0]["offset"] == 0
+                    assert actual["container"]["pages"][0]["body_length"] == len(opus_head())
+                    opus = actual["container"]["opus_head"]
+                    assert opus["offset"] == 28
+                    assert opus["length"] == 19
+                    assert opus["channel_count"] == 2
+                    assert opus["input_sample_rate"] == 48000
+                    assert opus["pre_skip"] == 312
+                except Exception as exc:
+                    failures.append((name, "parsed Ogg OpusHead", f"error: {exc}", actual))
+            if name == "sample.flac":
+                try:
+                    assert actual["container"]["format"] == "FLAC"
+                    block = actual["container"]["metadata_blocks"][0]
+                    assert block["offset"] == 4
+                    assert block["length"] == 38
+                    assert block["block_name"] == "STREAMINFO"
+                    assert block["sample_rate"] == 44100
+                    assert block["channels"] == 2
+                    assert block["bits_per_sample"] == 16
+                    assert block["total_samples"] == 44100
+                except Exception as exc:
+                    failures.append((name, "parsed FLAC STREAMINFO", f"error: {exc}", actual))
+            if name == "sample.mp3":
+                try:
+                    assert actual["bitstream"]["format"] == "MP3"
+                    assert actual["bitstream"]["id3"]["length"] == 10
+                    frame = actual["bitstream"]["frames"][0]
+                    assert frame["offset"] == 10
+                    assert frame["length"] == 417
+                    assert frame["version"] == "MPEG 1"
+                    assert frame["layer"] == "Layer III"
+                    assert frame["bitrate_kbps"] == 128
+                    assert frame["sample_rate"] == 44100
+                except Exception as exc:
+                    failures.append((name, "parsed MP3 frame", f"error: {exc}", actual))
             if name == "sample.aac":
                 try:
                     frame = actual["bitstream"]["frames"][0]
@@ -477,8 +637,51 @@ def main() -> int:
                     assert actual["bitstream"]["format"] == "Annex B H.264"
                     assert nalu["offset"] == 4
                     assert nalu["nal_type"] == 7
+                    assert nalu["nal_name"] == "SPS"
+                    assert actual["bitstream"]["parameter_set_count"] == 2
+                    sps = actual["bitstream"]["parameter_sets"][0]
+                    assert sps["kind"] == "SPS"
+                    assert sps["offset"] == 4
+                    assert sps["profile"] == "High"
+                    assert sps["level"] == "3.1"
+                    assert sps["width"] == 640
+                    assert sps["height"] == 360
                 except Exception as exc:
-                    failures.append((name, "parsed Annex B NAL units", f"error: {exc}", actual))
+                    failures.append((name, "parsed H.264 Annex B parameter sets", f"error: {exc}", actual))
+            if name == "sample.h265":
+                try:
+                    assert actual["bitstream"]["format"] == "Annex B HEVC"
+                    assert actual["bitstream"]["codec"] == "H.265/HEVC"
+                    assert actual["bitstream"]["nal_units"][0]["nal_type"] == 32
+                    assert actual["bitstream"]["nal_units"][0]["nal_name"] == "VPS"
+                    kinds = [item["kind"] for item in actual["bitstream"]["parameter_sets"]]
+                    assert kinds == ["VPS", "SPS", "PPS"]
+                except Exception as exc:
+                    failures.append((name, "parsed HEVC Annex B parameter sets", f"error: {exc}", actual))
+            if name == "sample.av1":
+                try:
+                    assert actual["bitstream"]["format"] == "AV1 OBU"
+                    obu = actual["bitstream"]["obu_units"][0]
+                    assert obu["obu_type"] == 1
+                    assert obu["obu_name"] == "Sequence Header"
+                    seq = actual["bitstream"]["sequence_headers"][0]
+                    assert seq["offset"] == 2
+                    assert seq["seq_profile"] == 0
+                    assert seq["still_picture"] is True
+                    assert seq["max_frame_width"] == 640
+                    assert seq["max_frame_height"] == 360
+                except Exception as exc:
+                    failures.append((name, "parsed AV1 sequence header", f"error: {exc}", actual))
+            if name == "sample.opushead":
+                try:
+                    assert actual["bitstream"]["format"] == "OpusHead"
+                    opus = actual["bitstream"]["opus_head"]
+                    assert opus["offset"] == 0
+                    assert opus["length"] == 19
+                    assert opus["channel_count"] == 2
+                    assert opus["input_sample_rate"] == 48000
+                except Exception as exc:
+                    failures.append((name, "parsed raw OpusHead", f"error: {exc}", actual))
 
         if failures:
             for name, expected, actual, detail in failures:

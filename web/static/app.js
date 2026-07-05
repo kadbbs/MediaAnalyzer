@@ -156,6 +156,10 @@ const dictionaries = {
     "label.frame": "帧",
     "label.element": "元素",
     "label.nalUnit": "NAL 单元",
+    "label.parameterSet": "参数集",
+    "label.obuUnit": "OBU",
+    "label.metadataBlock": "Metadata Block",
+    "label.page": "页",
     "outline.containerTree": "容器 / Box 树",
     "outline.tracksCodecHeaders": "轨道 / 编码头",
     "outline.packetsFrames": "包 / 帧 / 元素",
@@ -175,6 +179,12 @@ const dictionaries = {
     "selection.ebmlElementExplanation": "这是 EBML element 的真实字节范围。",
     "selection.frameExplanation": "这是 elementary stream frame 的真实字节范围。",
     "selection.nalExplanation": "这是 Annex B NAL unit 的真实字节范围。",
+    "selection.parameterSetExplanation": "这是 codec 参数集的真实字节范围，通常用于初始化解码器。",
+    "selection.obuExplanation": "这是 AV1 OBU 的真实字节范围，OBU 是 AV1 裸码流的基本组织单元。",
+    "selection.metadataBlockExplanation": "这是 metadata block 的真实字节范围，保存音频流级参数或扩展信息。",
+    "selection.pageExplanation": "这是容器 page 的真实字节范围。",
+    "selection.opusHeadExplanation": "这是 OpusHead 的真实字节范围，包含 Opus 解码初始化参数。",
+    "selection.id3Explanation": "这是 ID3 tag 的真实字节范围，通常保存 MP3 metadata。",
     "insight.format": "<strong>{format}</strong> 是识别出的封装/格式入口；封装负责组织轨道、时间线、索引和 metadata。",
     "insight.isoBmff": "这是 ISO-BMFF 家族文件。MP4、MOV、CMAF/fMP4 都属于这个体系，核心结构由一系列 box 组成。",
     "insight.majorBrand": "<strong>{brand}</strong> 是 major brand，用来提示播放器按哪类 MP4 兼容规则理解文件。",
@@ -322,6 +332,10 @@ const dictionaries = {
     "label.frame": "frame",
     "label.element": "element",
     "label.nalUnit": "NAL unit",
+    "label.parameterSet": "parameter set",
+    "label.obuUnit": "OBU",
+    "label.metadataBlock": "metadata block",
+    "label.page": "page",
     "outline.containerTree": "Container / Box Tree",
     "outline.tracksCodecHeaders": "Tracks / Codec Headers",
     "outline.packetsFrames": "Packets / Frames / Elements",
@@ -341,6 +355,12 @@ const dictionaries = {
     "selection.ebmlElementExplanation": "This is the real byte range of an EBML element.",
     "selection.frameExplanation": "This is the real byte range of an elementary stream frame.",
     "selection.nalExplanation": "This is the real byte range of an Annex B NAL unit.",
+    "selection.parameterSetExplanation": "This is the real byte range of a codec parameter set, usually used to initialize the decoder.",
+    "selection.obuExplanation": "This is the real byte range of an AV1 OBU, the basic unit of a raw AV1 bitstream.",
+    "selection.metadataBlockExplanation": "This is the real byte range of a metadata block containing stream parameters or extended information.",
+    "selection.pageExplanation": "This is the real byte range of a container page.",
+    "selection.opusHeadExplanation": "This is the real byte range of OpusHead decoder initialization data.",
+    "selection.id3Explanation": "This is the real byte range of an ID3 tag, commonly used for MP3 metadata.",
     "insight.format": "<strong>{format}</strong> is the detected container or format entry point. The container organizes tracks, timelines, indexes, and metadata.",
     "insight.isoBmff": "This is an ISO-BMFF family file. MP4, MOV, CMAF, and fMP4 belong to this family, and the core structure is a sequence of boxes.",
     "insight.majorBrand": "<strong>{brand}</strong> is the major brand, which hints which MP4 compatibility rules a player should apply.",
@@ -736,14 +756,71 @@ function genericAnalysisRanges(payload) {
     }
   });
 
+  (container.pages || []).forEach((page) => {
+    const range = normalizedRange(page.offset, page.length);
+    if (range) {
+      out.push({
+        title: `${t("label.page")} #${valueOrDash(page.index)}`,
+        meta: `seq ${valueOrDash(page.page_sequence_number)} · @${valueOrDash(page.offset)}`,
+        range,
+        rows: [
+          ["Serial", page.bitstream_serial_number],
+          ["Sequence", page.page_sequence_number],
+          ["Segments", page.segment_count],
+          ["Body", page.body_length],
+        ],
+        explanation: t("selection.pageExplanation"),
+      });
+    }
+  });
+
+  [container.opus_head, bitstream.opus_head].filter(Boolean).forEach((header) => {
+    const range = normalizedRange(header.offset, header.length);
+    if (range) {
+      out.push({
+        title: "OpusHead",
+        meta: `${valueOrDash(header.channel_count)} ch · @${valueOrDash(header.offset)}`,
+        range,
+        rows: [
+          [t("field.channels"), header.channel_count],
+          [t("field.sampleRate"), header.input_sample_rate],
+          ["Pre-skip", header.pre_skip],
+          ["Mapping", header.channel_mapping_family],
+        ],
+        explanation: t("selection.opusHeadExplanation"),
+      });
+    }
+  });
+
+  if (bitstream.id3) {
+    const range = normalizedRange(bitstream.id3.offset, bitstream.id3.length);
+    if (range) {
+      out.push({
+        title: "ID3",
+        meta: `v2.${valueOrDash(bitstream.id3.version_major)} · @${valueOrDash(bitstream.id3.offset)}`,
+        range,
+        rows: [
+          ["Version", `2.${valueOrDash(bitstream.id3.version_major)}.${valueOrDash(bitstream.id3.version_revision)}`],
+          ["Flags", bitstream.id3.flags],
+        ],
+        explanation: t("selection.id3Explanation"),
+      });
+    }
+  }
+
   (bitstream.frames || []).forEach((frame) => {
     const range = normalizedRange(frame.offset, frame.length);
     if (range) {
       out.push({
         title: `${t("label.frame")} #${valueOrDash(frame.index)}`,
-        meta: `${valueOrDash(frame.sample_rate)} Hz · @${valueOrDash(frame.offset)}`,
+        meta: `${frame.sample_rate ? `${frame.sample_rate} Hz` : valueOrDash(frame.layer || frame.profile)} · @${valueOrDash(frame.offset)}`,
         range,
-        rows: [[t("field.sampleRate"), frame.sample_rate], [t("field.channels"), frame.channel_config]],
+        rows: [
+          [t("field.sampleRate"), frame.sample_rate],
+          [t("field.channels"), frame.channel_config || frame.channel_mode],
+          ["Bitrate", frame.bitrate_kbps ? `${frame.bitrate_kbps} kbps` : ""],
+          ["Layer", frame.layer],
+        ],
         explanation: t("selection.frameExplanation"),
       });
     }
@@ -758,6 +835,82 @@ function genericAnalysisRanges(payload) {
         range,
         rows: [["NAL type", nal.nal_type], ["Start code", nal.start_code_length]],
         explanation: t("selection.nalExplanation"),
+      });
+    }
+  });
+
+  (bitstream.parameter_sets || []).forEach((set) => {
+    const range = normalizedRange(set.offset, set.length);
+    if (range) {
+      out.push({
+        title: `${t("label.parameterSet")} ${valueOrDash(set.kind)} #${valueOrDash(set.id)}`,
+        meta: `${valueOrDash(set.profile || set.kind)} · @${valueOrDash(set.offset)}`,
+        range,
+        rows: [
+          ["Kind", set.kind],
+          ["NAL type", set.nal_type],
+          [t("field.profile"), set.profile || set.profile_idc],
+          [t("field.level"), set.level || set.level_idc],
+          [t("field.width"), set.width],
+          [t("field.height"), set.height],
+        ],
+        explanation: t("selection.parameterSetExplanation"),
+      });
+    }
+  });
+
+  (bitstream.obu_units || []).forEach((obu) => {
+    const range = normalizedRange(obu.offset, obu.length);
+    if (range) {
+      out.push({
+        title: `${t("label.obuUnit")} #${valueOrDash(obu.index)}`,
+        meta: `${valueOrDash(obu.obu_name)} · @${valueOrDash(obu.offset)}`,
+        range,
+        rows: [
+          ["OBU type", obu.obu_type],
+          ["Name", obu.obu_name],
+          ["Payload", obu.payload_length],
+          ["Temporal", obu.temporal_id],
+          ["Spatial", obu.spatial_id],
+        ],
+        explanation: t("selection.obuExplanation"),
+      });
+    }
+  });
+
+  (bitstream.sequence_headers || []).forEach((header) => {
+    const range = normalizedRange(header.offset, header.length);
+    if (range) {
+      out.push({
+        title: "AV1 Sequence Header",
+        meta: `${valueOrDash(header.max_frame_width)} x ${valueOrDash(header.max_frame_height)} · @${valueOrDash(header.offset)}`,
+        range,
+        rows: [
+          ["Profile", header.seq_profile],
+          ["Level", header.seq_level_idx_0],
+          [t("field.width"), header.max_frame_width],
+          [t("field.height"), header.max_frame_height],
+        ],
+        explanation: t("selection.obuExplanation"),
+      });
+    }
+  });
+
+  [...(container.metadata_blocks || []), ...(bitstream.metadata_blocks || [])].forEach((block) => {
+    const range = normalizedRange(block.offset, block.length);
+    if (range) {
+      out.push({
+        title: `${t("label.metadataBlock")} #${valueOrDash(block.index)}`,
+        meta: `${valueOrDash(block.block_name)} · @${valueOrDash(block.offset)}`,
+        range,
+        rows: [
+          ["Type", block.block_name || block.block_type],
+          [t("field.sampleRate"), block.sample_rate],
+          [t("field.channels"), block.channels],
+          ["Bits/sample", block.bits_per_sample],
+          ["Total samples", block.total_samples],
+        ],
+        explanation: t("selection.metadataBlockExplanation"),
       });
     }
   });
@@ -1526,7 +1679,14 @@ function renderParsedOutline(payload) {
     const body = document.createElement("div");
     body.className = "outline-children";
     genericRanges.forEach((item) => {
-      body.append(outlineLeaf(item.title, item.meta, { offset: item.range.offset, length: item.range.length, hex: "" }, item.range));
+      body.append(outlineLeaf(
+        item.title,
+        item.meta,
+        { offset: item.range.offset, length: item.range.length, hex: "" },
+        item.range,
+        item.rows,
+        item.explanation,
+      ));
     });
     details.append(body);
     items.push(details);
@@ -1601,18 +1761,18 @@ function outlineTrack(track) {
   return details;
 }
 
-function outlineLeaf(label, meta, bytes, mapRange = null) {
+function outlineLeaf(label, meta, bytes, mapRange = null, rows = null, explanation = "") {
   const button = document.createElement("button");
   button.className = "outline-leaf";
   button.type = "button";
   button.innerHTML = `<strong>${escapeHtml(label)}</strong><span>${escapeHtml(meta || "")}</span>`;
   button.addEventListener("click", () => {
     markOutlineSelection(button);
-    const rows = [[t("field.info"), meta || "-"]];
+    const detailRows = rows || [[t("field.info"), meta || "-"]];
     if ((!bytes || !bytes.hex) && mapRange) {
-      renderSelectedMappedRange(label, mapRange, rows);
+      renderSelectedMappedRange(label, mapRange, detailRows, explanation);
     } else {
-      renderSelectedBytes(label, bytes || {}, rows, "", mapRange);
+      renderSelectedBytes(label, bytes || {}, detailRows, explanation, mapRange);
     }
   });
   return button;

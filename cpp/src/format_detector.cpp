@@ -65,6 +65,50 @@ bool LooksLikeAdts(std::span<const std::uint8_t> data, std::size_t offset) {
   return data[offset] == 0xFF && (data[offset + 1] & 0xF6) == 0xF0;
 }
 
+std::size_t AnnexBPayloadOffset(std::span<const std::uint8_t> data) {
+  if (HasBytes(data, 0, std::string_view("\x00\x00\x00\x01", 4))) {
+    return 4;
+  }
+  if (HasBytes(data, 0, std::string_view("\x00\x00\x01", 3))) {
+    return 3;
+  }
+  return data.size();
+}
+
+bool LooksLikeAv1Obu(std::span<const std::uint8_t> data) {
+  if (data.empty()) {
+    return false;
+  }
+  const auto header = data[0];
+  if ((header & 0x80) != 0 || (header & 0x01) != 0) {
+    return false;
+  }
+  const auto obu_type = (header >> 3) & 0x0f;
+  if (obu_type == 0 || obu_type > 8) {
+    return false;
+  }
+  const bool extension_flag = (header & 0x04) != 0;
+  const bool has_size_field = (header & 0x02) != 0;
+  std::size_t offset = 1 + (extension_flag ? 1 : 0);
+  if (offset > data.size()) {
+    return false;
+  }
+  if (!has_size_field) {
+    return obu_type == 1 && offset < data.size();
+  }
+  std::uint64_t value = 0;
+  std::uint32_t shift = 0;
+  for (int i = 0; i < 8 && offset < data.size(); ++i, ++offset) {
+    const auto byte = data[offset];
+    value |= static_cast<std::uint64_t>(byte & 0x7f) << shift;
+    if ((byte & 0x80) == 0) {
+      return offset + value <= data.size();
+    }
+    shift += 7;
+  }
+  return false;
+}
+
 bool LooksLikeMpegTs(std::span<const std::uint8_t> data) {
   constexpr std::size_t kPacket = 188;
   if (data.size() < kPacket * 2 + 1) {
@@ -207,6 +251,11 @@ FormatDetection DetectFormat(std::span<const std::uint8_t> data,
                          {"found FLV signature"});
   }
 
+  if (HasBytesAtZero(data, "OpusHead")) {
+    return MakeDetection("opus-head", FormatFamily::ElementaryStream, 0.98,
+                         {"found OpusHead signature"});
+  }
+
   if (HasBytesAtZero(data, "ID3")) {
     return MakeDetection("mp3", FormatFamily::ElementaryStream, 0.86,
                          {"found ID3 tag at start"});
@@ -222,10 +271,35 @@ FormatDetection DetectFormat(std::span<const std::uint8_t> data,
                          {"found ADTS syncword at start"});
   }
 
-  if (HasBytes(data, 0, std::string_view("\x00\x00\x00\x01", 4)) ||
-      HasBytes(data, 0, std::string_view("\x00\x00\x01", 3))) {
-    return MakeDetection("annex-b-bitstream", FormatFamily::ElementaryStream, 0.72,
-                         {"found Annex B start code at start"});
+  const auto annex_b_payload = AnnexBPayloadOffset(data);
+  if (annex_b_payload < data.size()) {
+    const auto lower_name = Lower(name_hint);
+    if (EndsWith(lower_name, ".h265") || EndsWith(lower_name, ".hevc")) {
+      return MakeDetection("hevc-annex-b", FormatFamily::ElementaryStream, 0.86,
+                           {"found Annex B start code at start", "file extension hints HEVC"});
+    }
+    if (EndsWith(lower_name, ".h264") || EndsWith(lower_name, ".avc")) {
+      return MakeDetection("h264-annex-b", FormatFamily::ElementaryStream, 0.86,
+                           {"found Annex B start code at start", "file extension hints H.264"});
+    }
+    const auto first = data[annex_b_payload];
+    const auto hevc_type = static_cast<std::uint32_t>((first >> 1) & 0x3f);
+    if ((first & 0x1f) == 0 || hevc_type == 32 || hevc_type == 33 || hevc_type == 34) {
+      return MakeDetection("hevc-annex-b", FormatFamily::ElementaryStream, 0.78,
+                           {"found Annex B start code at start", "first NAL header looks like HEVC"});
+    }
+    return MakeDetection("h264-annex-b", FormatFamily::ElementaryStream, 0.78,
+                         {"found Annex B start code at start", "first NAL header looks like H.264"});
+  }
+
+  if ((EndsWith(lower_name, ".obu") || EndsWith(lower_name, ".av1")) && LooksLikeAv1Obu(data)) {
+    return MakeDetection("av1-obu", FormatFamily::ElementaryStream, 0.82,
+                         {"file extension hints raw AV1 OBU", "first byte parses as AV1 OBU header"});
+  }
+
+  if (LooksLikeAv1Obu(data)) {
+    return MakeDetection("av1-obu", FormatFamily::ElementaryStream, 0.58,
+                         {"first byte parses as AV1 OBU header"});
   }
 
   if (LooksText(data)) {
