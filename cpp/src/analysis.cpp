@@ -768,33 +768,573 @@ std::string AnalyzeAnnexBToJson(const std::vector<std::uint8_t>& data,
   return out.str();
 }
 
+struct TsPacketInfo {
+  std::size_t index = 0;
+  std::size_t offset = 0;
+  bool sync = false;
+  bool transport_error = false;
+  bool payload_unit_start = false;
+  std::uint16_t pid = 0;
+  std::uint8_t adaptation_field_control = 0;
+  std::uint8_t continuity_counter = 0;
+  std::optional<std::size_t> adaptation_field_offset;
+  std::optional<std::size_t> adaptation_field_length;
+  std::optional<std::size_t> payload_offset;
+  std::optional<std::size_t> payload_length;
+  bool discontinuity = false;
+  bool random_access = false;
+  std::optional<std::size_t> pcr_offset;
+  std::optional<std::size_t> pcr_length;
+  std::optional<std::uint64_t> pcr_base;
+  std::optional<std::uint32_t> pcr_extension;
+};
+
+struct TsProgramInfo {
+  std::uint32_t program_number = 0;
+  std::uint16_t pmt_pid = 0;
+  std::size_t section_offset = 0;
+  std::size_t section_length = 0;
+};
+
+struct TsStreamInfo {
+  std::uint32_t program_number = 0;
+  std::uint16_t pcr_pid = 0;
+  std::uint8_t stream_type = 0;
+  std::string stream_type_name;
+  std::uint16_t elementary_pid = 0;
+  std::size_t es_info_offset = 0;
+  std::size_t es_info_length = 0;
+};
+
+struct TsTableInfo {
+  std::string kind;
+  std::uint16_t pid = 0;
+  std::size_t packet_index = 0;
+  std::size_t offset = 0;
+  std::size_t length = 0;
+  std::uint8_t table_id = 0;
+  std::uint32_t section_length = 0;
+  std::uint32_t version = 0;
+  std::optional<std::uint32_t> transport_stream_id;
+  std::optional<std::uint32_t> program_number;
+  std::optional<std::uint16_t> pcr_pid;
+};
+
+struct TsPesInfo {
+  std::size_t index = 0;
+  std::size_t packet_index = 0;
+  std::uint16_t pid = 0;
+  std::optional<std::uint8_t> stream_type;
+  std::string stream_type_name;
+  std::size_t offset = 0;
+  std::size_t length = 0;
+  std::uint8_t stream_id = 0;
+  std::string stream_id_name;
+  std::uint32_t pes_packet_length = 0;
+  std::size_t header_length = 0;
+  std::size_t payload_offset = 0;
+  std::size_t payload_length = 0;
+  std::optional<std::size_t> pts_offset;
+  std::optional<std::size_t> dts_offset;
+  std::optional<std::uint64_t> pts;
+  std::optional<std::uint64_t> dts;
+};
+
+std::string TsStreamTypeName(std::uint8_t stream_type) {
+  switch (stream_type) {
+    case 0x01:
+      return "MPEG-1 Video";
+    case 0x02:
+      return "MPEG-2 Video";
+    case 0x03:
+      return "MPEG-1 Audio";
+    case 0x04:
+      return "MPEG-2 Audio";
+    case 0x0F:
+      return "AAC ADTS";
+    case 0x1B:
+      return "H.264/AVC";
+    case 0x24:
+      return "H.265/HEVC";
+    case 0x81:
+      return "AC-3";
+    case 0x86:
+      return "SCTE-35";
+    default:
+      return "stream type 0x" + HexByte(stream_type);
+  }
+}
+
+std::string PesStreamIdName(std::uint8_t stream_id) {
+  if (stream_id >= 0xE0 && stream_id <= 0xEF) {
+    return "video stream";
+  }
+  if (stream_id >= 0xC0 && stream_id <= 0xDF) {
+    return "audio stream";
+  }
+  switch (stream_id) {
+    case 0xBC:
+      return "program stream map";
+    case 0xBD:
+      return "private stream 1";
+    case 0xBE:
+      return "padding stream";
+    case 0xBF:
+      return "private stream 2";
+    default:
+      return "stream id 0x" + HexByte(stream_id);
+  }
+}
+
+std::uint64_t ReadTsTimestamp(const std::vector<std::uint8_t>& data, std::size_t offset) {
+  if (offset + 5 > data.size()) {
+    return 0;
+  }
+  return ((static_cast<std::uint64_t>((data[offset] >> 1) & 0x07)) << 30) |
+         (static_cast<std::uint64_t>(data[offset + 1]) << 22) |
+         (static_cast<std::uint64_t>((data[offset + 2] >> 1) & 0x7f) << 15) |
+         (static_cast<std::uint64_t>(data[offset + 3]) << 7) |
+         static_cast<std::uint64_t>((data[offset + 4] >> 1) & 0x7f);
+}
+
+bool ContainsPid(const std::vector<std::uint16_t>& pids, std::uint16_t pid) {
+  return std::find(pids.begin(), pids.end(), pid) != pids.end();
+}
+
+bool ContainsProgram(const std::vector<TsProgramInfo>& programs,
+                     std::uint32_t program_number,
+                     std::uint16_t pmt_pid) {
+  for (const auto& program : programs) {
+    if (program.program_number == program_number && program.pmt_pid == pmt_pid) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const TsStreamInfo* FindTsStream(const std::vector<TsStreamInfo>& streams, std::uint16_t pid) {
+  for (const auto& stream : streams) {
+    if (stream.elementary_pid == pid) {
+      return &stream;
+    }
+  }
+  return nullptr;
+}
+
+std::optional<std::size_t> PsiSectionOffset(const std::vector<std::uint8_t>& data,
+                                            const TsPacketInfo& packet) {
+  if (!packet.payload_offset || !packet.payload_unit_start ||
+      *packet.payload_offset >= data.size()) {
+    return std::nullopt;
+  }
+  const auto pointer = data[*packet.payload_offset];
+  const auto section_offset = *packet.payload_offset + 1 + pointer;
+  if (section_offset + 3 > data.size() || section_offset >= packet.offset + 188) {
+    return std::nullopt;
+  }
+  return section_offset;
+}
+
+std::vector<TsPacketInfo> ParseTsPackets(const std::vector<std::uint8_t>& data) {
+  std::vector<TsPacketInfo> packets;
+  const auto packet_count = data.size() / 188;
+  packets.reserve(packet_count);
+  for (std::size_t i = 0; i < packet_count; ++i) {
+    const auto offset = i * 188;
+    const auto packet_end = offset + 188;
+    TsPacketInfo packet;
+    packet.index = i + 1;
+    packet.offset = offset;
+    packet.sync = data[offset] == 0x47;
+    packet.transport_error = (data[offset + 1] & 0x80) != 0;
+    packet.payload_unit_start = (data[offset + 1] & 0x40) != 0;
+    packet.pid = static_cast<std::uint16_t>(((data[offset + 1] & 0x1f) << 8) | data[offset + 2]);
+    packet.adaptation_field_control = (data[offset + 3] >> 4) & 0x03;
+    packet.continuity_counter = data[offset + 3] & 0x0f;
+
+    std::size_t cursor = offset + 4;
+    if (packet.adaptation_field_control == 2 || packet.adaptation_field_control == 3) {
+      if (cursor < packet_end) {
+        const auto adaptation_length = data[cursor];
+        packet.adaptation_field_offset = cursor;
+        packet.adaptation_field_length = static_cast<std::size_t>(adaptation_length) + 1;
+        if (adaptation_length > 0 && cursor + 1 < packet_end) {
+          const auto flags = data[cursor + 1];
+          packet.discontinuity = (flags & 0x80) != 0;
+          packet.random_access = (flags & 0x40) != 0;
+          if ((flags & 0x10) != 0 && adaptation_length >= 7 && cursor + 7 < packet_end) {
+            const auto pcr = cursor + 2;
+            const auto pcr_base =
+                (static_cast<std::uint64_t>(data[pcr]) << 25) |
+                (static_cast<std::uint64_t>(data[pcr + 1]) << 17) |
+                (static_cast<std::uint64_t>(data[pcr + 2]) << 9) |
+                (static_cast<std::uint64_t>(data[pcr + 3]) << 1) |
+                static_cast<std::uint64_t>((data[pcr + 4] >> 7) & 0x01);
+            const auto pcr_ext = static_cast<std::uint32_t>(((data[pcr + 4] & 0x01) << 8) |
+                                                            data[pcr + 5]);
+            packet.pcr_offset = pcr;
+            packet.pcr_length = 6;
+            packet.pcr_base = pcr_base;
+            packet.pcr_extension = pcr_ext;
+          }
+        }
+        cursor += static_cast<std::size_t>(adaptation_length) + 1;
+      }
+    }
+    if (packet.adaptation_field_control == 1 || packet.adaptation_field_control == 3) {
+      if (cursor < packet_end) {
+        packet.payload_offset = cursor;
+        packet.payload_length = packet_end - cursor;
+      }
+    }
+    packets.push_back(packet);
+  }
+  return packets;
+}
+
+void ParsePat(const std::vector<std::uint8_t>& data,
+              const TsPacketInfo& packet,
+              std::vector<TsTableInfo>& tables,
+              std::vector<TsProgramInfo>& programs,
+              std::vector<std::uint16_t>& pmt_pids) {
+  const auto section_offset = PsiSectionOffset(data, packet);
+  if (!section_offset || *section_offset + 8 > data.size() || data[*section_offset] != 0x00) {
+    return;
+  }
+  const auto section_length = static_cast<std::uint32_t>(((data[*section_offset + 1] & 0x0f) << 8) |
+                                                         data[*section_offset + 2]);
+  const auto section_end = *section_offset + 3 + section_length;
+  if (section_end > data.size() || section_end > packet.offset + 188 || section_length < 9) {
+    return;
+  }
+  TsTableInfo table;
+  table.kind = "PAT";
+  table.pid = packet.pid;
+  table.packet_index = packet.index;
+  table.offset = *section_offset;
+  table.length = 3 + section_length;
+  table.table_id = data[*section_offset];
+  table.section_length = section_length;
+  table.transport_stream_id = ReadBe16(data, *section_offset + 3);
+  table.version = (data[*section_offset + 5] >> 1) & 0x1f;
+  if (tables.size() < 128) {
+    tables.push_back(table);
+  }
+
+  const auto entries_end = section_end - 4;
+  for (std::size_t entry = *section_offset + 8; entry + 4 <= entries_end; entry += 4) {
+    const auto program_number = ReadBe16(data, entry);
+    const auto pid = static_cast<std::uint16_t>(((data[entry + 2] & 0x1f) << 8) |
+                                               data[entry + 3]);
+    if (program_number == 0) {
+      continue;
+    }
+    if (!ContainsProgram(programs, program_number, pid)) {
+      TsProgramInfo program;
+      program.program_number = program_number;
+      program.pmt_pid = pid;
+      program.section_offset = *section_offset;
+      program.section_length = 3 + section_length;
+      programs.push_back(program);
+    }
+    if (!ContainsPid(pmt_pids, pid)) {
+      pmt_pids.push_back(pid);
+    }
+  }
+}
+
+void ParsePmt(const std::vector<std::uint8_t>& data,
+              const TsPacketInfo& packet,
+              std::vector<TsTableInfo>& tables,
+              std::vector<TsStreamInfo>& streams) {
+  const auto section_offset = PsiSectionOffset(data, packet);
+  if (!section_offset || *section_offset + 12 > data.size() || data[*section_offset] != 0x02) {
+    return;
+  }
+  const auto section_length = static_cast<std::uint32_t>(((data[*section_offset + 1] & 0x0f) << 8) |
+                                                         data[*section_offset + 2]);
+  const auto section_end = *section_offset + 3 + section_length;
+  if (section_end > data.size() || section_end > packet.offset + 188 || section_length < 13) {
+    return;
+  }
+  const auto program_number = ReadBe16(data, *section_offset + 3);
+  const auto pcr_pid = static_cast<std::uint16_t>(((data[*section_offset + 8] & 0x1f) << 8) |
+                                                 data[*section_offset + 9]);
+  const auto program_info_length =
+      static_cast<std::size_t>(((data[*section_offset + 10] & 0x0f) << 8) |
+                               data[*section_offset + 11]);
+  const auto streams_start = *section_offset + 12 + program_info_length;
+  const auto streams_end = section_end - 4;
+  if (streams_start > streams_end) {
+    return;
+  }
+
+  TsTableInfo table;
+  table.kind = "PMT";
+  table.pid = packet.pid;
+  table.packet_index = packet.index;
+  table.offset = *section_offset;
+  table.length = 3 + section_length;
+  table.table_id = data[*section_offset];
+  table.section_length = section_length;
+  table.version = (data[*section_offset + 5] >> 1) & 0x1f;
+  table.program_number = program_number;
+  table.pcr_pid = pcr_pid;
+  if (tables.size() < 128) {
+    tables.push_back(table);
+  }
+
+  for (std::size_t entry = streams_start; entry + 5 <= streams_end;) {
+    const auto stream_type = data[entry];
+    const auto elementary_pid = static_cast<std::uint16_t>(((data[entry + 1] & 0x1f) << 8) |
+                                                          data[entry + 2]);
+    const auto es_info_length =
+        static_cast<std::size_t>(((data[entry + 3] & 0x0f) << 8) | data[entry + 4]);
+    if (entry + 5 + es_info_length > streams_end) {
+      break;
+    }
+    if (!FindTsStream(streams, elementary_pid)) {
+      TsStreamInfo stream;
+      stream.program_number = program_number;
+      stream.pcr_pid = pcr_pid;
+      stream.stream_type = stream_type;
+      stream.stream_type_name = TsStreamTypeName(stream_type);
+      stream.elementary_pid = elementary_pid;
+      stream.es_info_offset = entry + 5;
+      stream.es_info_length = es_info_length;
+      streams.push_back(stream);
+    }
+    entry += 5 + es_info_length;
+  }
+}
+
+std::vector<TsPesInfo> ParsePesPackets(const std::vector<std::uint8_t>& data,
+                                       const std::vector<TsPacketInfo>& packets,
+                                       const std::vector<TsStreamInfo>& streams) {
+  std::vector<TsPesInfo> pes_packets;
+  for (const auto& packet : packets) {
+    if (pes_packets.size() >= 128 || !packet.payload_unit_start || !packet.payload_offset) {
+      continue;
+    }
+    const auto* stream = FindTsStream(streams, packet.pid);
+    if (!stream) {
+      continue;
+    }
+    const auto offset = *packet.payload_offset;
+    const auto packet_end = packet.offset + 188;
+    if (offset + 9 > data.size() || offset + 9 > packet_end ||
+        data[offset] != 0x00 || data[offset + 1] != 0x00 || data[offset + 2] != 0x01) {
+      continue;
+    }
+    TsPesInfo pes;
+    pes.index = pes_packets.size() + 1;
+    pes.packet_index = packet.index;
+    pes.pid = packet.pid;
+    pes.stream_type = stream->stream_type;
+    pes.stream_type_name = stream->stream_type_name;
+    pes.offset = offset;
+    pes.length = packet_end - offset;
+    pes.stream_id = data[offset + 3];
+    pes.stream_id_name = PesStreamIdName(pes.stream_id);
+    pes.pes_packet_length = ReadBe16(data, offset + 4);
+
+    const bool has_optional_header =
+        pes.stream_id != 0xBC && pes.stream_id != 0xBE && pes.stream_id != 0xBF &&
+        pes.stream_id != 0xF0 && pes.stream_id != 0xF1 && pes.stream_id != 0xFF &&
+        pes.stream_id != 0xF2 && pes.stream_id != 0xF8;
+    if (has_optional_header && offset + 9 <= packet_end) {
+      const auto flags = data[offset + 7];
+      const auto pts_dts_flags = (flags >> 6) & 0x03;
+      const auto pes_header_data_length = data[offset + 8];
+      pes.header_length = 9 + pes_header_data_length;
+      if (pts_dts_flags == 0x02 && offset + 14 <= packet_end) {
+        pes.pts_offset = offset + 9;
+        pes.pts = ReadTsTimestamp(data, offset + 9);
+      } else if (pts_dts_flags == 0x03 && offset + 19 <= packet_end) {
+        pes.pts_offset = offset + 9;
+        pes.dts_offset = offset + 14;
+        pes.pts = ReadTsTimestamp(data, offset + 9);
+        pes.dts = ReadTsTimestamp(data, offset + 14);
+      }
+    } else {
+      pes.header_length = 6;
+    }
+    pes.payload_offset = std::min(packet_end, offset + pes.header_length);
+    pes.payload_length = packet_end - pes.payload_offset;
+    pes_packets.push_back(pes);
+  }
+  return pes_packets;
+}
+
 std::string AnalyzeMpegTsToJson(const std::vector<std::uint8_t>& data, int indent) {
+  auto packets = ParseTsPackets(data);
+  std::vector<TsTableInfo> tables;
+  std::vector<TsProgramInfo> programs;
+  std::vector<std::uint16_t> pmt_pids;
+  std::vector<TsStreamInfo> streams;
+
+  for (const auto& packet : packets) {
+    if (packet.pid == 0x0000) {
+      ParsePat(data, packet, tables, programs, pmt_pids);
+    }
+  }
+  for (const auto& packet : packets) {
+    if (ContainsPid(pmt_pids, packet.pid)) {
+      ParsePmt(data, packet, tables, streams);
+    }
+  }
+  const auto pes_packets = ParsePesPackets(data, packets, streams);
+
   std::ostringstream out;
   out << "{\n";
   out << std::string(indent + 2, ' ') << "\"format\": \"MPEG-TS\",\n";
   out << std::string(indent + 2, ' ') << "\"packet_size\": 188,\n";
   out << std::string(indent + 2, ' ') << "\"packets\": [\n";
-  const auto packet_count = data.size() / 188;
+  const auto packet_count = packets.size();
   const auto limit = std::min<std::size_t>(packet_count, 128);
   for (std::size_t i = 0; i < limit; ++i) {
-    const auto offset = i * 188;
+    const auto& packet = packets[i];
     if (i != 0) {
       out << ",\n";
     }
-    const auto pid = static_cast<std::uint16_t>(((data[offset + 1] & 0x1f) << 8) | data[offset + 2]);
+    out << std::string(indent + 4, ' ') << "{"
+        << "\"index\": " << packet.index
+        << ", \"offset\": " << packet.offset
+        << ", \"length\": 188"
+        << ", \"sync\": " << (packet.sync ? "true" : "false")
+        << ", \"transport_error\": " << (packet.transport_error ? "true" : "false")
+        << ", \"payload_unit_start\": " << (packet.payload_unit_start ? "true" : "false")
+        << ", \"pid\": " << packet.pid
+        << ", \"adaptation_field_control\": " << static_cast<int>(packet.adaptation_field_control)
+        << ", \"continuity_counter\": " << static_cast<int>(packet.continuity_counter);
+    if (packet.adaptation_field_offset) {
+      out << ", \"adaptation_field_offset\": " << *packet.adaptation_field_offset
+          << ", \"adaptation_field_length\": " << *packet.adaptation_field_length
+          << ", \"discontinuity\": " << (packet.discontinuity ? "true" : "false")
+          << ", \"random_access\": " << (packet.random_access ? "true" : "false");
+    }
+    if (packet.payload_offset) {
+      out << ", \"payload_offset\": " << *packet.payload_offset
+          << ", \"payload_length\": " << *packet.payload_length;
+    }
+    if (packet.pcr_base) {
+      const auto pcr_seconds =
+          static_cast<double>(*packet.pcr_base) / 90000.0 +
+          static_cast<double>(*packet.pcr_extension) / 27000000.0;
+      out << ", \"pcr_offset\": " << *packet.pcr_offset
+          << ", \"pcr_length\": " << *packet.pcr_length;
+      out << ", \"pcr_base\": " << *packet.pcr_base
+          << ", \"pcr_extension\": " << *packet.pcr_extension
+          << ", \"pcr_seconds\": " << std::fixed << std::setprecision(6) << pcr_seconds;
+    }
+    out << "}";
+  }
+  out << "\n" << std::string(indent + 2, ' ') << "],\n";
+  out << std::string(indent + 2, ' ') << "\"tables\": [\n";
+  for (std::size_t i = 0; i < tables.size(); ++i) {
+    const auto& table = tables[i];
+    if (i != 0) {
+      out << ",\n";
+    }
     out << std::string(indent + 4, ' ') << "{"
         << "\"index\": " << (i + 1)
-        << ", \"offset\": " << offset
-        << ", \"length\": 188"
-        << ", \"sync\": " << (data[offset] == 0x47 ? "true" : "false")
-        << ", \"payload_unit_start\": " << (((data[offset + 1] & 0x40) != 0) ? "true" : "false")
-        << ", \"pid\": " << pid
-        << ", \"adaptation_field_control\": " << static_cast<int>((data[offset + 3] >> 4) & 0x03)
-        << ", \"continuity_counter\": " << static_cast<int>(data[offset + 3] & 0x0f)
+        << ", \"kind\": \"" << JsonEscape(table.kind) << "\""
+        << ", \"pid\": " << table.pid
+        << ", \"packet_index\": " << table.packet_index
+        << ", \"offset\": " << table.offset
+        << ", \"length\": " << table.length
+        << ", \"table_id\": " << static_cast<int>(table.table_id)
+        << ", \"section_length\": " << table.section_length
+        << ", \"version\": " << table.version;
+    if (table.transport_stream_id) {
+      out << ", \"transport_stream_id\": " << *table.transport_stream_id;
+    }
+    if (table.program_number) {
+      out << ", \"program_number\": " << *table.program_number;
+    }
+    if (table.pcr_pid) {
+      out << ", \"pcr_pid\": " << *table.pcr_pid;
+    }
+    out << "}";
+  }
+  out << "\n" << std::string(indent + 2, ' ') << "],\n";
+  out << std::string(indent + 2, ' ') << "\"programs\": [\n";
+  for (std::size_t i = 0; i < programs.size(); ++i) {
+    const auto& program = programs[i];
+    if (i != 0) {
+      out << ",\n";
+    }
+    out << std::string(indent + 4, ' ') << "{"
+        << "\"index\": " << (i + 1)
+        << ", \"program_number\": " << program.program_number
+        << ", \"pmt_pid\": " << program.pmt_pid
+        << ", \"section_offset\": " << program.section_offset
+        << ", \"section_length\": " << program.section_length
         << "}";
   }
   out << "\n" << std::string(indent + 2, ' ') << "],\n";
-  out << std::string(indent + 2, ' ') << "\"packet_count\": " << packet_count << "\n";
+  out << std::string(indent + 2, ' ') << "\"streams\": [\n";
+  for (std::size_t i = 0; i < streams.size(); ++i) {
+    const auto& stream = streams[i];
+    if (i != 0) {
+      out << ",\n";
+    }
+    out << std::string(indent + 4, ' ') << "{"
+        << "\"index\": " << (i + 1)
+        << ", \"program_number\": " << stream.program_number
+        << ", \"pcr_pid\": " << stream.pcr_pid
+        << ", \"stream_type\": " << static_cast<int>(stream.stream_type)
+        << ", \"stream_type_name\": \"" << JsonEscape(stream.stream_type_name) << "\""
+        << ", \"elementary_pid\": " << stream.elementary_pid
+        << ", \"es_info_offset\": " << stream.es_info_offset
+        << ", \"es_info_length\": " << stream.es_info_length
+        << "}";
+  }
+  out << "\n" << std::string(indent + 2, ' ') << "],\n";
+  out << std::string(indent + 2, ' ') << "\"pes_packets\": [\n";
+  for (std::size_t i = 0; i < pes_packets.size(); ++i) {
+    const auto& pes = pes_packets[i];
+    if (i != 0) {
+      out << ",\n";
+    }
+    out << std::string(indent + 4, ' ') << "{"
+        << "\"index\": " << pes.index
+        << ", \"packet_index\": " << pes.packet_index
+        << ", \"pid\": " << pes.pid;
+    if (pes.stream_type) {
+      out << ", \"stream_type\": " << static_cast<int>(*pes.stream_type)
+          << ", \"stream_type_name\": \"" << JsonEscape(pes.stream_type_name) << "\"";
+    }
+    out << ", \"offset\": " << pes.offset
+        << ", \"length\": " << pes.length
+        << ", \"stream_id\": " << static_cast<int>(pes.stream_id)
+        << ", \"stream_id_name\": \"" << JsonEscape(pes.stream_id_name) << "\""
+        << ", \"pes_packet_length\": " << pes.pes_packet_length
+        << ", \"header_length\": " << pes.header_length
+        << ", \"payload_offset\": " << pes.payload_offset
+        << ", \"payload_length\": " << pes.payload_length;
+    if (pes.pts) {
+      out << ", \"pts_offset\": " << *pes.pts_offset
+          << ", \"pts_length\": 5"
+          << ", \"pts\": " << *pes.pts
+          << ", \"pts_seconds\": " << std::fixed << std::setprecision(6)
+          << (static_cast<double>(*pes.pts) / 90000.0);
+    }
+    if (pes.dts) {
+      out << ", \"dts_offset\": " << *pes.dts_offset
+          << ", \"dts_length\": 5"
+          << ", \"dts\": " << *pes.dts
+          << ", \"dts_seconds\": " << std::fixed << std::setprecision(6)
+          << (static_cast<double>(*pes.dts) / 90000.0);
+    }
+    out << "}";
+  }
+  out << "\n" << std::string(indent + 2, ' ') << "],\n";
+  out << std::string(indent + 2, ' ') << "\"packet_count\": " << packet_count << ",\n";
+  out << std::string(indent + 2, ' ') << "\"table_count\": " << tables.size() << ",\n";
+  out << std::string(indent + 2, ' ') << "\"program_count\": " << programs.size() << ",\n";
+  out << std::string(indent + 2, ' ') << "\"stream_count\": " << streams.size() << ",\n";
+  out << std::string(indent + 2, ' ') << "\"pes_packet_count\": " << pes_packets.size() << "\n";
   out << std::string(indent, ' ') << "}";
   return out.str();
 }

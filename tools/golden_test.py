@@ -17,7 +17,7 @@ FIXTURES = {
     "video_hvc1.mp4": None,
     "audio_aac.mp4": None,
     "sample.webm": b"\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01\x42\xf7\x81\x01",
-    "sample.ts": b"\x47" + (b"\x00" * 187) + b"\x47" + (b"\x00" * 187) + b"\x47" + (b"\x00" * 187),
+    "sample.ts": None,
     "sample.wav": b"RIFF\x24\x00\x00\x00WAVEfmt ",
     "sample.ogg": None,
     "sample.flac": None,
@@ -81,6 +81,88 @@ def box(kind: bytes, payload: bytes) -> bytes:
 
 def fullbox(kind: bytes, payload: bytes, version: int = 0, flags: int = 0) -> bytes:
     return box(kind, bytes([version]) + flags.to_bytes(3, "big") + payload)
+
+
+def ts_packet(pid: int, payload_unit_start: bool, payload: bytes, continuity: int, adaptation: bytes = b"") -> bytes:
+    adaptation_field_control = 3 if adaptation else 1
+    header = bytes(
+        [
+            0x47,
+            (0x40 if payload_unit_start else 0x00) | ((pid >> 8) & 0x1F),
+            pid & 0xFF,
+            (adaptation_field_control << 4) | (continuity & 0x0F),
+        ]
+    )
+    body = (bytes([len(adaptation)]) + adaptation if adaptation else b"") + payload
+    assert len(header) + len(body) <= 188
+    return header + body + (b"\xff" * (188 - len(header) - len(body)))
+
+
+def encode_pcr(base: int, extension: int = 0) -> bytes:
+    return bytes(
+        [
+            (base >> 25) & 0xFF,
+            (base >> 17) & 0xFF,
+            (base >> 9) & 0xFF,
+            (base >> 1) & 0xFF,
+            ((base & 0x01) << 7) | 0x7E | ((extension >> 8) & 0x01),
+            extension & 0xFF,
+        ]
+    )
+
+
+def encode_pts(prefix: int, value: int) -> bytes:
+    return bytes(
+        [
+            (prefix << 4) | (((value >> 30) & 0x07) << 1) | 1,
+            (value >> 22) & 0xFF,
+            (((value >> 15) & 0x7F) << 1) | 1,
+            (value >> 7) & 0xFF,
+            ((value & 0x7F) << 1) | 1,
+        ]
+    )
+
+
+def make_mpeg_ts() -> bytes:
+    pmt_pid = 0x0100
+    video_pid = 0x0101
+    pat_section = (
+        bytes([0x00])
+        + bytes([0xB0, 0x0D])
+        + be16(1)
+        + bytes([0xC1, 0x00, 0x00])
+        + be16(1)
+        + bytes([0xE0 | ((pmt_pid >> 8) & 0x1F), pmt_pid & 0xFF])
+        + b"\x00\x00\x00\x00"
+    )
+    pat = ts_packet(0x0000, True, b"\x00" + pat_section, 0)
+
+    pmt_section = (
+        bytes([0x02])
+        + bytes([0xB0, 0x12])
+        + be16(1)
+        + bytes([0xC1, 0x00, 0x00])
+        + bytes([0xE0 | ((video_pid >> 8) & 0x1F), video_pid & 0xFF])
+        + bytes([0xF0, 0x00])
+        + bytes([0x1B])
+        + bytes([0xE0 | ((video_pid >> 8) & 0x1F), video_pid & 0xFF])
+        + bytes([0xF0, 0x00])
+        + b"\x00\x00\x00\x00"
+    )
+    pmt = ts_packet(pmt_pid, True, b"\x00" + pmt_section, 0)
+
+    pts = 90000
+    pes_header = (
+        b"\x00\x00\x01"
+        + bytes([0xE0])
+        + be16(0)
+        + bytes([0x80, 0x80, 0x05])
+        + encode_pts(0x02, pts)
+    )
+    h264_access_unit = b"\x00\x00\x01\x09\xf0\x00\x00\x01\x65\x88\x84"
+    adaptation = bytes([0x50]) + encode_pcr(90000)
+    pes = ts_packet(video_pid, True, pes_header + h264_access_unit, 0, adaptation)
+    return pat + pmt + pes
 
 
 def make_video_avc1_mp4() -> bytes:
@@ -440,6 +522,7 @@ def make_av1_obu() -> bytes:
 FIXTURES["video_avc1.mp4"] = make_video_avc1_mp4()
 FIXTURES["video_hvc1.mp4"] = make_video_hvc1_mp4()
 FIXTURES["audio_aac.mp4"] = make_audio_aac_mp4()
+FIXTURES["sample.ts"] = make_mpeg_ts()
 FIXTURES["sample.ogg"] = make_ogg_opus()
 FIXTURES["sample.flac"] = make_flac_stream()
 FIXTURES["sample.mp3"] = make_mp3_stream()
@@ -572,8 +655,36 @@ def main() -> int:
                     assert actual["container"]["packets"][0]["offset"] == 0
                     assert actual["container"]["packets"][0]["length"] == 188
                     assert actual["container"]["packets"][0]["sync"] is True
+                    assert actual["container"]["table_count"] == 2
+                    assert actual["container"]["program_count"] == 1
+                    assert actual["container"]["stream_count"] == 1
+                    assert actual["container"]["pes_packet_count"] == 1
+                    assert actual["container"]["tables"][0]["kind"] == "PAT"
+                    assert actual["container"]["tables"][0]["offset"] == 5
+                    assert actual["container"]["tables"][0]["length"] == 16
+                    assert actual["container"]["programs"][0]["program_number"] == 1
+                    assert actual["container"]["programs"][0]["pmt_pid"] == 0x0100
+                    assert actual["container"]["tables"][1]["kind"] == "PMT"
+                    assert actual["container"]["tables"][1]["pcr_pid"] == 0x0101
+                    stream = actual["container"]["streams"][0]
+                    assert stream["stream_type"] == 0x1B
+                    assert stream["stream_type_name"] == "H.264/AVC"
+                    assert stream["elementary_pid"] == 0x0101
+                    assert actual["container"]["packets"][2]["pcr_offset"] == 382
+                    assert actual["container"]["packets"][2]["pcr_length"] == 6
+                    assert actual["container"]["packets"][2]["pcr_base"] == 90000
+                    pes = actual["container"]["pes_packets"][0]
+                    assert pes["pid"] == 0x0101
+                    assert pes["offset"] == 388
+                    assert pes["stream_id"] == 0xE0
+                    assert pes["stream_type_name"] == "H.264/AVC"
+                    assert pes["header_length"] == 14
+                    assert pes["payload_offset"] == 402
+                    assert pes["pts_offset"] == 397
+                    assert pes["pts_length"] == 5
+                    assert pes["pts"] == 90000
                 except Exception as exc:
-                    failures.append((name, "parsed MPEG-TS packets", f"error: {exc}", actual))
+                    failures.append((name, "parsed MPEG-TS PSI/PES", f"error: {exc}", actual))
             if name == "sample.webm":
                 try:
                     assert actual["container"]["format"] == "Matroska/WebM"

@@ -153,6 +153,10 @@ const dictionaries = {
     "mode.learning": "学习",
     "mode.expert": "专家",
     "label.packet": "包",
+    "label.table": "表",
+    "label.program": "节目",
+    "label.pesPacket": "PES 包",
+    "label.timestamp": "时间戳",
     "label.frame": "帧",
     "label.element": "元素",
     "label.nalUnit": "NAL 单元",
@@ -162,7 +166,7 @@ const dictionaries = {
     "label.page": "页",
     "outline.containerTree": "容器 / Box 树",
     "outline.tracksCodecHeaders": "轨道 / 编码头",
-    "outline.packetsFrames": "包 / 帧 / 元素",
+    "outline.packetsFrames": "包 / 表 / 帧 / 元素",
     "diagnostic.lowConfidence": "检测置信度较低：{confidence}",
     "diagnostic.isoNoStructure": "检测到 ISO-BMFF，但容器解析器没有返回结构",
     "diagnostic.noTracksFound": "容器已解析，但没有发现轨道",
@@ -176,6 +180,10 @@ const dictionaries = {
     "selection.bytesExplanation": "这里显示右侧结构索引选中的局部字节；左侧始终保留整体输入二进制，方便按 offset 对照。",
     "selection.sampleExplanation": "这个 sample 位于媒体数据 payload 中；左侧会高亮它在文件里的真实字节范围。",
     "selection.tsPacketExplanation": "这是 MPEG-TS packet 的真实字节范围。",
+    "selection.tsTableExplanation": "这是 MPEG-TS PSI section 的真实字节范围，例如 PAT 或 PMT。",
+    "selection.tsProgramExplanation": "这是 PAT 中节目映射信息所在的 section 字节范围。",
+    "selection.pesExplanation": "这是 PES header 及其在当前 TS packet 中承载 payload 的真实字节范围。",
+    "selection.tsTimestampExplanation": "这是 MPEG-TS 时间戳字段的真实字节范围，PCR 使用 27MHz/90kHz 时钟，PTS/DTS 使用 90kHz 时钟。",
     "selection.ebmlElementExplanation": "这是 EBML element 的真实字节范围。",
     "selection.frameExplanation": "这是 elementary stream frame 的真实字节范围。",
     "selection.nalExplanation": "这是 Annex B NAL unit 的真实字节范围。",
@@ -329,6 +337,10 @@ const dictionaries = {
     "mode.learning": "Learning",
     "mode.expert": "Expert",
     "label.packet": "packet",
+    "label.table": "table",
+    "label.program": "program",
+    "label.pesPacket": "PES packet",
+    "label.timestamp": "timestamp",
     "label.frame": "frame",
     "label.element": "element",
     "label.nalUnit": "NAL unit",
@@ -338,7 +350,7 @@ const dictionaries = {
     "label.page": "page",
     "outline.containerTree": "Container / Box Tree",
     "outline.tracksCodecHeaders": "Tracks / Codec Headers",
-    "outline.packetsFrames": "Packets / Frames / Elements",
+    "outline.packetsFrames": "Packets / Tables / Frames / Elements",
     "diagnostic.lowConfidence": "low detection confidence: {confidence}",
     "diagnostic.isoNoStructure": "ISO-BMFF detected but container parser did not return a structure",
     "diagnostic.noTracksFound": "container parsed but no tracks were found",
@@ -352,6 +364,10 @@ const dictionaries = {
     "selection.bytesExplanation": "This panel shows the local bytes selected from the structure index. The full input binary remains on the left for offset-level comparison.",
     "selection.sampleExplanation": "This sample lives in the media data payload. The left panel highlights its real byte range in the file.",
     "selection.tsPacketExplanation": "This is the real byte range of an MPEG-TS packet.",
+    "selection.tsTableExplanation": "This is the real byte range of an MPEG-TS PSI section such as PAT or PMT.",
+    "selection.tsProgramExplanation": "This is the PAT section byte range containing the program mapping.",
+    "selection.pesExplanation": "This is the real byte range of the PES header plus payload carried in the current TS packet.",
+    "selection.tsTimestampExplanation": "This is the real byte range of an MPEG-TS timestamp field. PCR uses 27MHz/90kHz clocks; PTS/DTS use a 90kHz clock.",
     "selection.ebmlElementExplanation": "This is the real byte range of an EBML element.",
     "selection.frameExplanation": "This is the real byte range of an elementary stream frame.",
     "selection.nalExplanation": "This is the real byte range of an Annex B NAL unit.",
@@ -737,8 +753,132 @@ function genericAnalysisRanges(payload) {
         title: `${t("label.packet")} #${valueOrDash(packet.index)}`,
         meta: `PID ${valueOrDash(packet.pid)} · @${valueOrDash(packet.offset)}`,
         range,
-        rows: [["PID", packet.pid], ["CC", packet.continuity_counter]],
+        rows: [
+          ["PID", packet.pid],
+          ["PUSI", packet.payload_unit_start],
+          ["AFC", packet.adaptation_field_control],
+          ["CC", packet.continuity_counter],
+          ["PCR", packet.pcr_seconds],
+        ],
         explanation: t("selection.tsPacketExplanation"),
+      });
+    }
+    const pcrRange = normalizedRange(packet.pcr_offset, packet.pcr_length);
+    if (pcrRange) {
+      out.push({
+        title: `${t("label.timestamp")} PCR #${valueOrDash(packet.index)}`,
+        meta: `${valueOrDash(packet.pcr_seconds)}s · PID ${valueOrDash(packet.pid)}`,
+        range: pcrRange,
+        rows: [
+          ["PID", packet.pid],
+          ["PCR base", packet.pcr_base],
+          ["PCR ext", packet.pcr_extension],
+          ["Seconds", packet.pcr_seconds],
+        ],
+        explanation: t("selection.tsTimestampExplanation"),
+      });
+    }
+  });
+
+  (container.tables || []).forEach((table) => {
+    const range = normalizedRange(table.offset, table.length);
+    if (range) {
+      out.push({
+        title: `${t("label.table")} ${valueOrDash(table.kind)} #${valueOrDash(table.index)}`,
+        meta: `PID ${valueOrDash(table.pid)} · @${valueOrDash(table.offset)}`,
+        range,
+        rows: [
+          ["Kind", table.kind],
+          ["PID", table.pid],
+          ["Section length", table.section_length],
+          ["Version", table.version],
+          ["Program", table.program_number],
+          ["PCR PID", table.pcr_pid],
+        ],
+        explanation: t("selection.tsTableExplanation"),
+      });
+    }
+  });
+
+  (container.programs || []).forEach((program) => {
+    const range = normalizedRange(program.section_offset, program.section_length);
+    if (range) {
+      out.push({
+        title: `${t("label.program")} #${valueOrDash(program.program_number)}`,
+        meta: `PMT PID ${valueOrDash(program.pmt_pid)}`,
+        range,
+        rows: [
+          ["Program", program.program_number],
+          ["PMT PID", program.pmt_pid],
+        ],
+        explanation: t("selection.tsProgramExplanation"),
+      });
+    }
+  });
+
+  (container.streams || []).forEach((stream) => {
+    const range = normalizedRange(stream.es_info_offset, stream.es_info_length);
+    if (range) {
+      out.push({
+        title: `${valueOrDash(stream.stream_type_name)} PID ${valueOrDash(stream.elementary_pid)}`,
+        meta: `type ${valueOrDash(stream.stream_type)} · program ${valueOrDash(stream.program_number)}`,
+        range,
+        rows: [
+          ["Program", stream.program_number],
+          ["PID", stream.elementary_pid],
+          ["Stream type", stream.stream_type_name || stream.stream_type],
+          ["PCR PID", stream.pcr_pid],
+        ],
+        explanation: t("selection.tsTableExplanation"),
+      });
+    }
+  });
+
+  (container.pes_packets || []).forEach((pes) => {
+    const range = normalizedRange(pes.offset, pes.length);
+    if (range) {
+      out.push({
+        title: `${t("label.pesPacket")} #${valueOrDash(pes.index)}`,
+        meta: `PID ${valueOrDash(pes.pid)} · ${valueOrDash(pes.stream_type_name || pes.stream_id_name)}`,
+        range,
+        rows: [
+          ["PID", pes.pid],
+          ["Stream", pes.stream_type_name || pes.stream_id_name],
+          ["Stream ID", pes.stream_id],
+          ["PES length", pes.pes_packet_length],
+          ["Header", pes.header_length],
+          ["PTS", pes.pts_seconds ?? pes.pts],
+          ["DTS", pes.dts_seconds ?? pes.dts],
+        ],
+        explanation: t("selection.pesExplanation"),
+      });
+    }
+    const ptsRange = normalizedRange(pes.pts_offset, pes.pts_length);
+    if (ptsRange) {
+      out.push({
+        title: `${t("label.timestamp")} PTS #${valueOrDash(pes.index)}`,
+        meta: `${valueOrDash(pes.pts_seconds)}s · PID ${valueOrDash(pes.pid)}`,
+        range: ptsRange,
+        rows: [
+          ["PID", pes.pid],
+          ["PTS", pes.pts],
+          ["Seconds", pes.pts_seconds],
+        ],
+        explanation: t("selection.tsTimestampExplanation"),
+      });
+    }
+    const dtsRange = normalizedRange(pes.dts_offset, pes.dts_length);
+    if (dtsRange) {
+      out.push({
+        title: `${t("label.timestamp")} DTS #${valueOrDash(pes.index)}`,
+        meta: `${valueOrDash(pes.dts_seconds)}s · PID ${valueOrDash(pes.pid)}`,
+        range: dtsRange,
+        rows: [
+          ["PID", pes.pid],
+          ["DTS", pes.dts],
+          ["Seconds", pes.dts_seconds],
+        ],
+        explanation: t("selection.tsTimestampExplanation"),
       });
     }
   });
