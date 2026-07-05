@@ -428,6 +428,11 @@ if (!dictionaries[locale]) {
 let currentPayload = null;
 let currentStatus = { key: "status.ready", params: {}, raw: null, isError: false };
 let activeByteRange = null;
+let mainHexView = null;
+let mainHexRenderFrame = 0;
+const HEX_BYTES_PER_LINE = 16;
+const HEX_ROW_HEIGHT = 21;
+const HEX_OVERSCAN_LINES = 24;
 
 function t(key, params = {}) {
   const source = dictionaries[locale] || dictionaries["zh-CN"];
@@ -1194,8 +1199,7 @@ function outlineLeaf(label, meta, bytes, mapRange = null) {
 
 function renderMainByteDump(title, bytes) {
   byteDumpTitle.textContent = title || t("label.inputBytes");
-  byteDump.replaceChildren(hexDumpFromHex(bytes.hex || "", bytes.offset || 0, bytes.ascii || ""));
-  highlightMappedRange(false);
+  renderVirtualHexDump(bytes || {});
 }
 
 function markOutlineSelection(target) {
@@ -1241,42 +1245,148 @@ function selectMappedRange(range) {
 }
 
 function highlightMappedRange(shouldScroll) {
-  byteDump.querySelectorAll(".hex-line.mapped, .hex-byte.mapped, .ascii-byte.mapped").forEach((item) => {
-    item.classList.remove("mapped");
-  });
-  if (!activeByteRange) {
+  if (!mainHexView) {
+    return;
+  }
+  if (shouldScroll && activeByteRange) {
+    scrollMainHexToRange(activeByteRange);
+  }
+  mainHexView.lastStart = -1;
+  mainHexView.lastEnd = -1;
+  scheduleVirtualHexRender();
+}
+
+function renderVirtualHexDump(bytes) {
+  const parsedBytes = hexToBytes(bytes.hex || "");
+  if (!parsedBytes.length) {
+    mainHexView = null;
+    byteDump.replaceChildren(emptyBlock(t("empty.noBytes")));
     return;
   }
 
-  const rangeStart = activeByteRange.offset;
-  const rangeEnd = rangeStart + activeByteRange.length;
-  let firstMapped = null;
+  const viewport = document.createElement("div");
+  viewport.className = "hex-virtual";
+  viewport.style.height = `${Math.ceil(parsedBytes.length / HEX_BYTES_PER_LINE) * HEX_ROW_HEIGHT}px`;
 
-  byteDump.querySelectorAll(".hex-line").forEach((line) => {
-    const lineStart = Number(line.dataset.lineStart);
-    const lineEnd = Number(line.dataset.lineEnd);
-    if (!Number.isFinite(lineStart) || !Number.isFinite(lineEnd) || lineEnd <= rangeStart || lineStart >= rangeEnd) {
-      return;
-    }
+  const lines = document.createElement("div");
+  lines.className = "hex-virtual-lines";
+  viewport.append(lines);
+  byteDump.replaceChildren(viewport);
+  byteDump.scrollTop = 0;
 
+  mainHexView = {
+    bytes: parsedBytes,
+    baseOffset: Number(bytes.offset || 0),
+    asciiHint: bytes.ascii || "",
+    totalRows: Math.ceil(parsedBytes.length / HEX_BYTES_PER_LINE),
+    lines,
+    lastStart: -1,
+    lastEnd: -1,
+  };
+
+  byteDump.onscroll = () => scheduleVirtualHexRender();
+  renderVirtualHexWindow();
+}
+
+function scheduleVirtualHexRender() {
+  if (!mainHexView) {
+    return;
+  }
+  cancelAnimationFrame(mainHexRenderFrame);
+  mainHexRenderFrame = requestAnimationFrame(renderVirtualHexWindow);
+}
+
+function renderVirtualHexWindow() {
+  if (!mainHexView) {
+    return;
+  }
+
+  const visibleStart = Math.max(0, Math.floor(byteDump.scrollTop / HEX_ROW_HEIGHT) - HEX_OVERSCAN_LINES);
+  const visibleCount = Math.ceil(byteDump.clientHeight / HEX_ROW_HEIGHT) + HEX_OVERSCAN_LINES * 2;
+  const visibleEnd = Math.min(mainHexView.totalRows, visibleStart + visibleCount);
+  if (visibleStart === mainHexView.lastStart && visibleEnd === mainHexView.lastEnd) {
+    return;
+  }
+
+  mainHexView.lastStart = visibleStart;
+  mainHexView.lastEnd = visibleEnd;
+  mainHexView.lines.style.transform = `translateY(${visibleStart * HEX_ROW_HEIGHT}px)`;
+
+  const fragment = document.createDocumentFragment();
+  for (let row = visibleStart; row < visibleEnd; row += 1) {
+    const byteOffset = row * HEX_BYTES_PER_LINE;
+    const slice = mainHexView.bytes.slice(byteOffset, byteOffset + HEX_BYTES_PER_LINE);
+    fragment.append(hexLineElement(slice, mainHexView.baseOffset + byteOffset, mainHexView.asciiHint, byteOffset));
+  }
+  mainHexView.lines.replaceChildren(fragment);
+}
+
+function scrollMainHexToRange(range) {
+  const rangeOffset = Number(range.offset);
+  if (!Number.isFinite(rangeOffset)) {
+    return;
+  }
+
+  const relativeOffset = rangeOffset - mainHexView.baseOffset;
+  if (relativeOffset < 0 || relativeOffset >= mainHexView.bytes.length) {
+    return;
+  }
+
+  const row = Math.floor(relativeOffset / HEX_BYTES_PER_LINE);
+  byteDump.scrollTop = Math.max(0, (row * HEX_ROW_HEIGHT) - (byteDump.clientHeight / 2));
+}
+
+function hexLineElement(slice, lineStart, asciiHint, asciiOffset) {
+  const line = document.createElement("div");
+  line.className = "hex-line";
+  line.dataset.lineStart = String(lineStart);
+  line.dataset.lineEnd = String(lineStart + slice.length);
+
+  const rangeStart = activeByteRange ? activeByteRange.offset : null;
+  const rangeEnd = activeByteRange ? activeByteRange.offset + activeByteRange.length : null;
+  const lineIsMapped = activeByteRange && lineStart < rangeEnd && (lineStart + slice.length) > rangeStart;
+  if (lineIsMapped) {
     line.classList.add("mapped");
-    if (!firstMapped) {
-      firstMapped = line;
+  }
+
+  const address = document.createElement("span");
+  address.className = "hex-address";
+  address.textContent = toHexOffset(lineStart);
+
+  const hexBytes = document.createElement("span");
+  hexBytes.className = "hex-bytes";
+  slice.forEach((byte, index) => {
+    if (index > 0) {
+      hexBytes.append(document.createTextNode(" "));
     }
-    line.querySelectorAll(".hex-byte, .ascii-byte").forEach((byte) => {
-      const offset = Number(byte.dataset.offset);
-      if (offset >= rangeStart && offset < rangeEnd) {
-        byte.classList.add("mapped");
-        if (!firstMapped) {
-          firstMapped = byte;
-        }
-      }
-    });
+    const byteCell = document.createElement("span");
+    byteCell.className = "hex-byte";
+    byteCell.dataset.offset = String(lineStart + index);
+    byteCell.textContent = byte.toString(16).padStart(2, "0");
+    if (lineIsMapped && lineStart + index >= rangeStart && lineStart + index < rangeEnd) {
+      byteCell.classList.add("mapped");
+    }
+    hexBytes.append(byteCell);
   });
 
-  if (shouldScroll && firstMapped) {
-    firstMapped.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
-  }
+  const ascii = document.createElement("span");
+  ascii.className = "hex-ascii";
+  const asciiText = asciiHint
+    ? asciiHint.slice(asciiOffset, asciiOffset + slice.length).padEnd(slice.length, " ")
+    : Array.from(slice, (byte) => byte >= 0x20 && byte <= 0x7e ? String.fromCharCode(byte) : ".").join("");
+  slice.forEach((byte, index) => {
+    const asciiCell = document.createElement("span");
+    asciiCell.className = "ascii-byte";
+    asciiCell.dataset.offset = String(lineStart + index);
+    asciiCell.textContent = asciiText[index] || ".";
+    if (lineIsMapped && lineStart + index >= rangeStart && lineStart + index < rangeEnd) {
+      asciiCell.classList.add("mapped");
+    }
+    ascii.append(asciiCell);
+  });
+
+  line.append(address, hexBytes, ascii);
+  return line;
 }
 
 function hexByteLength(hex) {
@@ -1393,12 +1503,44 @@ function hexDumpFromHex(hex, baseOffset, asciiHint = "") {
 }
 
 function hexToBytes(hex) {
-  return String(hex || "")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((part) => Number.parseInt(part, 16))
-    .filter((value) => Number.isFinite(value));
+  const text = String(hex || "");
+  let nibbleCount = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (hexNibble(text.charCodeAt(index)) >= 0) {
+      nibbleCount += 1;
+    }
+  }
+
+  const out = new Uint8Array(Math.floor(nibbleCount / 2));
+  let highNibble = -1;
+  let outIndex = 0;
+  for (let index = 0; index < text.length && outIndex < out.length; index += 1) {
+    const nibble = hexNibble(text.charCodeAt(index));
+    if (nibble < 0) {
+      continue;
+    }
+    if (highNibble < 0) {
+      highNibble = nibble;
+      continue;
+    }
+    out[outIndex] = (highNibble << 4) | nibble;
+    outIndex += 1;
+    highNibble = -1;
+  }
+  return out;
+}
+
+function hexNibble(code) {
+  if (code >= 48 && code <= 57) {
+    return code - 48;
+  }
+  if (code >= 65 && code <= 70) {
+    return code - 55;
+  }
+  if (code >= 97 && code <= 102) {
+    return code - 87;
+  }
+  return -1;
 }
 
 function toHexOffset(value) {

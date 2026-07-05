@@ -796,6 +796,19 @@ pre {
   padding: 8px;
 }
 
+.hex-virtual {
+  position: relative;
+  min-width: 650px;
+}
+
+.hex-virtual-lines {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  padding: 8px;
+}
+
 .hex-line {
   display: grid;
   grid-template-columns: 90px 1fr 140px;
